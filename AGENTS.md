@@ -56,6 +56,17 @@ We need to be on the same page with terminology. When communicating, use this la
 - **turn** means one user-to-agent cycle, including follow-up work such as checkpointing.
 - **T3 home** means the base data directory. Runtime state normally lives below its userdata directory.
 
+## Linear
+
+When asked to read, query, create, or work on Linear issues or project items for this repository without a specific project/team named, default to the **Uqori** project:
+
+- **Project**: `Uqori` (`https://linear.app/anilpixel-projects/project/uqori-5e504982f821/overview`, ID: `28736bff-9a37-4233-bc46-777dc048378b`, slugId: `5e504982f821`)
+- **Team**: `Uqori` (key: `UQO`, ID: `2d028015-a62c-4727-8fee-c3118ac3b7da`)
+- **CLI**: `/home/antigravity/.gemini/bin/linear` (prepend `export PATH="/home/antigravity/.gemini/bin:$PATH"`)
+  - Query project issues: `linear issue query --team UQO --project Uqori --state triage,backlog,unstarted,started`
+  - View an issue: `linear issue view UQO-<number>`
+  - Create an issue in this project: `linear issue create --team UQO --project Uqori --title "..." --description "..."`
+
 ## The three ways to hurt yourself
 
 1. **Killing by pattern.** Never `pkill -f`, `pgrep | kill`, or `kill` a PID you found by matching a name, path, or worktree string. Your own agent process has this worktree's path in its argv, and this machine runs several other dev servers at once. Kill only a PID you captured at spawn, or the owner of your port from `ss -H -ltnp` after confirming `/proc/<pid>/cwd` is your worktree.
