@@ -100,6 +100,7 @@ import type {
   ProjectionRecordFilter,
 } from "../orchestration-v2/ProjectionStore.ts";
 import { runOutcome } from "../orchestration-v2/RestartBackgroundNote.ts";
+import { threadHasUnfinishedWork } from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -2422,6 +2423,12 @@ const make = Effect.gen(function* () {
           ? undefined
           : PeerForwarding.remoteTarget(callerScope, input.target.environmentId);
       if (input.target !== undefined && environmentId !== undefined) {
+        if (input.continueTaskId !== undefined) {
+          return yield* failure(
+            "invalid_request",
+            "continueTaskId only supports local delegated tasks on this thread, not remote environment targets.",
+          );
+        }
         yield* requireCapability(callerScope);
         const scope = yield* requireThreadScope(callerScope, "delegate_task");
         // The task's child runs as an ordinary thread there; this thread keeps the task.
@@ -2434,9 +2441,6 @@ const make = Effect.gen(function* () {
           : readTask(scope, taskId, false, true);
       }
       const { scope, parent } = yield* loadThreadCaller(callerScope, "delegate_task");
-      const targetProjectId = input.target?.projectId ?? parent.thread.projectId;
-      const isCrossProject = targetProjectId !== parent.thread.projectId;
-      const targetProject = isCrossProject ? yield* requireProject(targetProjectId) : undefined;
       const parentRun = parent.runs
         .filter(ThreadManagementService.isActiveRun)
         .toSorted((left, right) => right.ordinal - left.ordinal)[0];
@@ -2450,7 +2454,6 @@ const make = Effect.gen(function* () {
           "Delegated tasks require an active run owned by this MCP provider session.",
         );
       }
-      const providers = yield* loadProviders;
       const key = yield* requestKey(input.clientRequestId);
       const commandId = stableCommandId({
         scope,
@@ -2458,24 +2461,127 @@ const make = Effect.gen(function* () {
         operation: "delegate-task",
       });
       const isRetryOfAcceptedDelegation = yield* threadManagement.hasReceipt(commandId);
+
+      let continuedChild:
+        | Pick<OrchestrationV2ThreadProjection, "thread" | "runs" | "runtimeRequests">
+        | undefined;
+      if (input.continueTaskId !== undefined) {
+        const continuedTask = (yield* loadTasks(scope.thread.threadId, [
+          input.continueTaskId,
+        ])).find(
+          (candidate) =>
+            candidate.id === input.continueTaskId &&
+            candidate.origin === "app_owned" &&
+            candidate.threadId === scope.thread.threadId,
+        );
+        if (continuedTask === undefined) {
+          return yield* failure(
+            "task_not_found",
+            `Delegated task ${input.continueTaskId} does not belong to thread ${scope.thread.threadId}.`,
+          );
+        }
+        if (continuedTask.childThreadId === null) {
+          return yield* failure(
+            "invalid_request",
+            `Delegated task ${input.continueTaskId} runs in a linked environment and cannot be continued with continueTaskId.`,
+          );
+        }
+        const loadedChild = yield* loadThreadRecords(continuedTask.childThreadId, [
+          "runs",
+          "runtimeRequests",
+        ]);
+        if (
+          loadedChild.thread.deletedAt !== null ||
+          loadedChild.thread.lineage.parentThreadId !== parent.thread.id ||
+          loadedChild.thread.lineage.relationshipToParent !== "subagent"
+        ) {
+          return yield* failure(
+            "thread_not_found",
+            `Child thread ${continuedTask.childThreadId} for task ${input.continueTaskId} is no longer available.`,
+          );
+        }
+        if (!isRetryOfAcceptedDelegation && threadHasUnfinishedWork(loadedChild)) {
+          return yield* failure(
+            "invalid_request",
+            `Delegated task ${input.continueTaskId} still has unfinished work in child thread ${loadedChild.thread.id}. Wait for it to finish or cancel it with task_cancel first.`,
+          );
+        }
+        if (
+          input.target?.projectId !== undefined &&
+          input.target.projectId !== loadedChild.thread.projectId
+        ) {
+          return yield* failure(
+            "invalid_request",
+            `Continued task ${input.continueTaskId} belongs to project ${loadedChild.thread.projectId}, not ${input.target.projectId}.`,
+          );
+        }
+        if (input.isolation === "shared" && loadedChild.thread.worktreePath !== null) {
+          return yield* failure(
+            "invalid_request",
+            `Continued task ${input.continueTaskId} uses an isolated worktree checkout and cannot switch to isolation "shared".`,
+          );
+        }
+        if (input.isolation === "worktree" && loadedChild.thread.worktreePath === null) {
+          return yield* failure(
+            "invalid_request",
+            `Continued task ${input.continueTaskId} uses a shared checkout and cannot switch to isolation "worktree".`,
+          );
+        }
+        continuedChild = loadedChild;
+      }
+
+      const targetProjectId =
+        continuedChild !== undefined
+          ? continuedChild.thread.projectId
+          : (input.target?.projectId ?? parent.thread.projectId);
+      const isCrossProject = targetProjectId !== parent.thread.projectId;
+      const targetProject = isCrossProject ? yield* requireProject(targetProjectId) : undefined;
+      const providers = yield* loadProviders;
+      const inheritanceSource =
+        continuedChild === undefined
+          ? parent
+          : {
+              thread: {
+                ...parent.thread,
+                modelSelection: continuedChild.thread.modelSelection,
+              },
+            };
       const target = yield* resolveTargetRechecking({
-        parent,
+        parent: inheritanceSource,
         target: input.target,
         providers,
         targetProject,
         skipProjectEnablementFilter: isRetryOfAcceptedDelegation,
       });
+      const effectiveRuntimeModeInput =
+        input.runtimeMode !== undefined || continuedChild === undefined
+          ? input.runtimeMode
+          : runtimeModeRank(continuedChild.thread.runtimeMode) <=
+              runtimeModeRank(parent.thread.runtimeMode)
+            ? continuedChild.thread.runtimeMode
+            : "inherit";
       const runtimeMode = yield* resolveRuntimeMode(
         parent.thread.runtimeMode,
-        input.runtimeMode,
+        effectiveRuntimeModeInput,
         target,
       );
+      const effectiveInteractionModeInput =
+        input.interactionMode !== undefined || continuedChild === undefined
+          ? input.interactionMode
+          : interactionModeRank(continuedChild.thread.interactionMode) <=
+              interactionModeRank(parent.thread.interactionMode)
+            ? continuedChild.thread.interactionMode
+            : "inherit";
       const interactionMode = yield* resolveInteractionMode(
         parent.thread.interactionMode,
-        input.interactionMode,
+        effectiveInteractionModeInput,
       );
       let workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy | undefined;
-      if (input.isolation === "worktree" && !isRetryOfAcceptedDelegation) {
+      if (
+        continuedChild === undefined &&
+        input.isolation === "worktree" &&
+        !isRetryOfAcceptedDelegation
+      ) {
         const project = targetProject ?? (yield* requireProject(parent.thread.projectId));
         const checkoutCwd = isCrossProject
           ? project.workspaceRoot
@@ -2524,6 +2630,7 @@ const make = Effect.gen(function* () {
           parentThreadId: scope.thread.threadId,
           parentRunId: parentRun.id,
           parentNodeId: parentRun.rootNodeId,
+          ...(input.continueTaskId === undefined ? {} : { continueTaskId: input.continueTaskId }),
           ...(isCrossProject ? { targetProjectId } : {}),
           task: taskPrompt(input),
           ...(input.title === undefined ? {} : { title: input.title }),

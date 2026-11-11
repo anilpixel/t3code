@@ -68,6 +68,7 @@ import {
   isRuntimeModeAbove,
   resolveProviderInstanceEnabled,
   resolveProjectProviderInstanceEnabled,
+  type ProjectId,
   type ProviderSessionId,
   RunId,
   RuntimeMode,
@@ -8097,41 +8098,159 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const taskNodeId = idAllocator.derive.delegatedTaskNode({
         commandId: command.commandId,
       });
-      const childThreadId = idAllocator.derive.delegatedTaskThread({
-        commandId: command.commandId,
-      });
       const childMessageId = idAllocator.derive.delegatedTaskMessage({
         commandId: command.commandId,
       });
       const taskTurnItemId = idAllocator.derive.delegatedTaskTurnItem({
         commandId: command.commandId,
       });
-      const taskTitle = subagentThreadTitle({
-        parentTitle: parentProjection.thread.title,
-        prompt: command.task,
-        ...(command.title === undefined ? {} : { title: command.title }),
-        ordinal: (yield* subagentCount(command.parentThreadId)) + 1,
-      });
-      const childThread: OrchestrationV2AppThread = {
-        ...makeSubagentChildThread({
-          parentThread: parentProjection.thread,
-          childThreadId,
-          parentNodeId: taskNodeId,
-          ...(command.targetProjectId === undefined
-            ? {}
-            : { targetProjectId: command.targetProjectId }),
-          activeProviderThreadId: null,
+      const emitEvent = emit(events, command);
+
+      let childThreadId: ThreadId;
+      let childProjectId: ProjectId;
+      let taskTitle: string;
+
+      if (command.continueTaskId !== undefined) {
+        const parentSubagents = yield* projectionStore
+          .getThreadRecords(command.parentThreadId, ["subagents"], {
+            subagentIds: [command.continueTaskId],
+          })
+          .pipe(mapDispatchError(command));
+        const continued = parentSubagents.subagents.find(
+          (candidate) =>
+            candidate.id === command.continueTaskId &&
+            candidate.origin === "app_owned" &&
+            candidate.childThreadId !== null,
+        );
+        if (continued === undefined || continued.childThreadId === null) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: `Delegated task ${command.continueTaskId} cannot be continued on thread ${command.parentThreadId}.`,
+          });
+        }
+        const existingChild = yield* projectionStore
+          .getThreadRecords(continued.childThreadId, ["runs", "runtimeRequests"])
+          .pipe(mapDispatchError(command));
+        if (
+          existingChild.thread.deletedAt !== null ||
+          existingChild.thread.lineage.parentThreadId !== command.parentThreadId ||
+          existingChild.thread.lineage.relationshipToParent !== "subagent"
+        ) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: `Child thread ${continued.childThreadId} is no longer available for continuation.`,
+          });
+        }
+        if (threadHasUnfinishedWork(existingChild)) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: `Child thread ${existingChild.thread.id} still has unfinished work.`,
+          });
+        }
+        if (command.workspaceStrategy !== undefined) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "Continued delegated tasks reuse the existing child workspace.",
+          });
+        }
+        const expectedProjectId = command.targetProjectId ?? parentProjection.thread.projectId;
+        if (expectedProjectId !== existingChild.thread.projectId) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: `Continued delegated task project ${expectedProjectId} does not match child thread project ${existingChild.thread.projectId}.`,
+          });
+        }
+
+        let updatedChildThread = existingChild.thread;
+        if (updatedChildThread.archivedAt !== null) {
+          updatedChildThread = { ...updatedChildThread, archivedAt: null, updatedAt: now };
+          yield* emitEvent({
+            type: "thread.unarchived",
+            threadId: updatedChildThread.id,
+            providerInstanceId: updatedChildThread.providerInstanceId,
+            occurredAt: now,
+            payload: updatedChildThread,
+          });
+        }
+        if (updatedChildThread.runtimeMode !== command.runtimeMode) {
+          updatedChildThread = {
+            ...updatedChildThread,
+            runtimeMode: command.runtimeMode,
+            updatedAt: now,
+          };
+          yield* emitEvent({
+            type: "thread.runtime-mode-updated",
+            threadId: updatedChildThread.id,
+            providerInstanceId: updatedChildThread.providerInstanceId,
+            occurredAt: now,
+            payload: updatedChildThread,
+          });
+        }
+        if (updatedChildThread.interactionMode !== command.interactionMode) {
+          updatedChildThread = {
+            ...updatedChildThread,
+            interactionMode: command.interactionMode,
+            updatedAt: now,
+          };
+          yield* emitEvent({
+            type: "thread.interaction-mode-updated",
+            threadId: updatedChildThread.id,
+            providerInstanceId: updatedChildThread.providerInstanceId,
+            occurredAt: now,
+            payload: updatedChildThread,
+          });
+        }
+
+        childThreadId = updatedChildThread.id;
+        childProjectId = updatedChildThread.projectId;
+        taskTitle = command.title ?? updatedChildThread.title;
+      } else {
+        childThreadId = idAllocator.derive.delegatedTaskThread({
+          commandId: command.commandId,
+        });
+        taskTitle = subagentThreadTitle({
+          parentTitle: parentProjection.thread.title,
+          prompt: command.task,
+          ...(command.title === undefined ? {} : { title: command.title }),
+          ordinal: (yield* subagentCount(command.parentThreadId)) + 1,
+        });
+        const childThread: OrchestrationV2AppThread = {
+          ...makeSubagentChildThread({
+            parentThread: parentProjection.thread,
+            childThreadId,
+            parentNodeId: taskNodeId,
+            ...(command.targetProjectId === undefined
+              ? {}
+              : { targetProjectId: command.targetProjectId }),
+            activeProviderThreadId: null,
+            providerInstanceId: command.modelSelection.instanceId,
+            modelSelection: command.modelSelection,
+            title: taskTitle,
+            now,
+            createdBy: command.createdBy,
+            creationSource: command.creationSource,
+          }),
+          runtimeMode: command.runtimeMode,
+          interactionMode: command.interactionMode,
+          ...(command.workspaceStrategy === undefined ? {} : { branch: null, worktreePath: null }),
+        };
+        childProjectId = childThread.projectId;
+
+        yield* emitEvent({
+          type: "thread.created",
+          threadId: childThreadId,
+          driver: targetAdapter.driver,
           providerInstanceId: command.modelSelection.instanceId,
-          modelSelection: command.modelSelection,
-          title: taskTitle,
-          now,
-          createdBy: command.createdBy,
-          creationSource: command.creationSource,
-        }),
-        runtimeMode: command.runtimeMode,
-        interactionMode: command.interactionMode,
-        ...(command.workspaceStrategy === undefined ? {} : { branch: null, worktreePath: null }),
-      };
+          occurredAt: now,
+          payload: childThread,
+        });
+      }
+
       const task: OrchestrationV2Subagent = {
         id: taskNodeId,
         threadId: command.parentThreadId,
@@ -8143,13 +8262,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         providerInstanceId: command.modelSelection.instanceId,
         providerThreadId: null,
         childThreadId,
-        ...(childThread.projectId === parentProjection.thread.projectId
-          ? {}
-          : { childProjectId: childThread.projectId }),
+        ...(childProjectId === parentProjection.thread.projectId ? {} : { childProjectId }),
         nativeTaskRef: null,
         prompt: command.task,
         title: command.title ?? null,
         model: command.modelSelection.model,
+        modelSelection: command.modelSelection,
         ...(command.completionWake === undefined ? {} : { completionWake: command.completionWake }),
         status: "running",
         result: null,
@@ -8199,16 +8317,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         prompt: command.task,
         result: null,
       };
-      const emitEvent = emit(events, command);
 
-      yield* emitEvent({
-        type: "thread.created",
-        threadId: childThreadId,
-        driver: targetAdapter.driver,
-        providerInstanceId: command.modelSelection.instanceId,
-        occurredAt: now,
-        payload: childThread,
-      });
       yield* emitEvent({
         type: "node.updated",
         threadId: command.parentThreadId,
@@ -8259,12 +8368,25 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       yield* dispatchMessage(childMessageCommand, events, effects);
 
       const childProjection = yield* getProjectionWithPendingEvents(childThreadId, events);
-      const childRun = childProjection.runs[0];
+      const childRun = childProjection.runs.find(
+        (candidate) => candidate.userMessageId === childMessageId,
+      );
       if (childRun === undefined) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
           commandType: command.type,
           cause: `Delegated child thread ${childThreadId} did not create a run.`,
+        });
+      }
+      if (command.continueTaskId !== undefined && childRun.delegatedTaskId !== taskNodeId) {
+        yield* emitEvent({
+          type: "run.updated",
+          threadId: childThreadId,
+          runId: childRun.id,
+          ...(childRun.rootNodeId === null ? {} : { nodeId: childRun.rootNodeId }),
+          providerInstanceId: childRun.providerInstanceId,
+          occurredAt: now,
+          payload: { ...childRun, delegatedTaskId: taskNodeId },
         });
       }
       const spawnTransferId = yield* mapDispatchError(command)(
@@ -13458,6 +13580,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ),
           );
         if (
+          thread.interactionMode === "orchestrate" ||
           thread.settledOverride !== null ||
           DateTime.toEpochMillis(thread.updatedAt) > DateTime.toEpochMillis(command.snapshotAt)
         ) {
@@ -14140,6 +14263,46 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ),
         ),
       );
+    if (command.type === "delegated_task.request" && command.continueTaskId !== undefined) {
+      const continueTaskId = command.continueTaskId;
+      return yield* threadDispatch.withLock(
+        command.parentThreadId,
+        Effect.gen(function* () {
+          const parentSubagents = yield* projectionStore
+            .getThreadRecords(command.parentThreadId, ["subagents"], {
+              subagentIds: [continueTaskId],
+            })
+            .pipe(
+              Effect.catchTags({
+                ProjectionStoreThreadNotFoundError: () => Effect.succeed({ subagents: [] }),
+              }),
+              Effect.mapError(
+                (cause) =>
+                  new OrchestratorProjectionError({ threadId: command.parentThreadId, cause }),
+              ),
+            );
+          const continued = parentSubagents.subagents.find(
+            (candidate) =>
+              candidate.id === continueTaskId &&
+              candidate.origin === "app_owned" &&
+              candidate.childThreadId !== null,
+          );
+          if (
+            continued?.childThreadId === undefined ||
+            continued.childThreadId === null ||
+            continued.childThreadId === command.parentThreadId
+          ) {
+            return yield* dispatchWithReceiptEffect(command);
+          }
+          const child = yield* findThread(continued.childThreadId);
+          return yield* child !== null &&
+          child.lineage.parentThreadId === command.parentThreadId &&
+          child.lineage.relationshipToParent === "subagent"
+            ? threadDispatch.withLock(continued.childThreadId, dispatchWithReceiptEffect(command))
+            : dispatchWithReceiptEffect(command);
+        }),
+      );
+    }
     // Answering a message-mode question can also start a follow-up.
     if (
       command.type !== "runtime-request.respond" &&

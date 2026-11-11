@@ -161,6 +161,24 @@ describe("isAutoSettlementCandidate", () => {
     expect(ThreadSettlementService.isSnoozed(snoozed, NOW_MS)).toBe(false);
   });
 
+  it("never automatically settles an orchestrate-mode thread on inactivity or merged PRs", () => {
+    const orchestrate = shell({
+      interactionMode: "orchestrate",
+      latestUserMessageAt: at(-10 * DAY_MS),
+      latestRunCompletedAt: at(-9 * DAY_MS),
+    });
+    expect(ThreadSettlementService.isAutoSettlementCandidate(orchestrate, NOW_MS)).toBe(false);
+    expect(
+      ThreadSettlementService.resolveAutoSettlementAt({
+        thread: orchestrate,
+        pullRequest: { state: "merged", mergedAt: DateTime.formatIso(at(-1)) },
+        nowMs: NOW_MS,
+        autoSettleAfterDays: 1,
+        autoSettleOnMerge: true,
+      }),
+    ).toBeNull();
+  });
+
   it("keeps snoozed threads parked until a fresh failure or timer wake", () => {
     const snoozed = shell({
       snoozedUntil: at(60 * 60 * 1_000),

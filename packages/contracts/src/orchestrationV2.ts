@@ -1122,6 +1122,9 @@ export const OrchestrationV2ProviderThread = Schema.Struct({
   goal: Schema.optional(Schema.NullOr(OrchestrationV2ProviderGoal)).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  orchestrateContextFingerprint: Schema.optional(Schema.NullOr(Schema.String)).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   createdAt: Schema.DateTimeUtc,
   updatedAt: Schema.DateTimeUtc,
 });
@@ -3355,6 +3358,7 @@ export const OrchestrationV2Command = Schema.Union([
     parentThreadId: ThreadId,
     parentRunId: RunId,
     parentNodeId: NodeId,
+    continueTaskId: Schema.optional(NodeId),
     targetProjectId: Schema.optional(ProjectId),
     task: TrimmedNonEmptyString,
     title: Schema.optional(TrimmedNonEmptyString),
