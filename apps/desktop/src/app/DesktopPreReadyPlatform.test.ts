@@ -126,17 +126,17 @@ describe("DesktopPreReadyPlatform", () => {
   ])("prepares a $label Linux desktop entry before startup yields", ({ previousEntry }) => {
     vi.stubEnv("VITE_DEV_SERVER_URL", "");
     getSwitchValueMock.mockReturnValue("");
-    let desktopName = "t3code.desktop";
+    let desktopName = "uqori.desktop";
     let desktopEntry = previousEntry;
     let iconInstalled = false;
     copyFileSyncMock.mockImplementation((_source: string, destination: string) => {
-      iconInstalled = destination === "/xdg/icons/com.t3tools.T3Code.desktop.png";
+      iconInstalled = destination === "/xdg/icons/com.uqori.App.desktop.png";
     });
     setDesktopNameMock.mockImplementation((name: string) => {
       desktopName = name;
     });
     writeFileSyncMock.mockImplementation((path: string, contents: string) => {
-      if (path === "/xdg/applications/com.t3tools.T3Code.desktop") desktopEntry = contents;
+      if (path === "/xdg/applications/com.uqori.App.desktop") desktopEntry = contents;
     });
 
     return Effect.scoped(
@@ -158,14 +158,11 @@ describe("DesktopPreReadyPlatform", () => {
           ),
         );
         const identity = yield* Effect.promise(() => portalIdentity);
-        assert.equal(identity.desktopName, "com.t3tools.T3Code.desktop");
+        assert.equal(identity.desktopName, "com.uqori.App.desktop");
         assert.include(identity.desktopEntry ?? "", "Exec=/Applications/current.AppImage %U");
-        assert.include(identity.desktopEntry ?? "", "Name=T3 Code (Beta)");
-        assert.include(identity.desktopEntry ?? "", "MimeType=x-scheme-handler/t3code;");
-        assert.include(
-          identity.desktopEntry ?? "",
-          "Icon=/xdg/icons/com.t3tools.T3Code.desktop.png",
-        );
+        assert.include(identity.desktopEntry ?? "", "Name=Uqori (Beta)");
+        assert.include(identity.desktopEntry ?? "", "MimeType=x-scheme-handler/uqori;");
+        assert.include(identity.desktopEntry ?? "", "Icon=/xdg/icons/com.uqori.App.desktop.png");
         assert.isTrue(identity.iconInstalled);
       }),
     ).pipe(Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())));
@@ -184,15 +181,15 @@ describe("DesktopPreReadyPlatform", () => {
               DesktopConfig.layerTest({
                 XDG_DATA_HOME: "/xdg",
                 APPIMAGE: "/Applications/current.AppImage",
-                T3CODE_DESKTOP_LAUNCHER_PATH: " /opt/T3 Code/t3code ",
+                T3CODE_DESKTOP_LAUNCHER_PATH: " /opt/Uqori App/uqori ",
               }),
             ),
           ),
         );
         const entry = writeFileSyncMock.mock.calls.find(
-          ([path]) => path === "/xdg/applications/com.t3tools.T3Code.desktop",
+          ([path]) => path === "/xdg/applications/com.uqori.App.desktop",
         )?.[1];
-        assert.include(entry, 'Exec="/opt/T3 Code/t3code" %U');
+        assert.include(entry, 'Exec="/opt/Uqori App/uqori" %U');
       }),
     ).pipe(Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())));
   });

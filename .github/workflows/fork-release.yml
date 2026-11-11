@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version (for example 0.1.9)"
+        description: "Release version (for example 0.1.10)"
         required: false
-        default: "0.1.9"
+        default: "0.1.10"
         type: string
       prerelease:
         description: "Mark release as prerelease"
@@ -64,7 +64,7 @@ jobs:
             tag="${GITHUB_REF_NAME}"
             version="${tag#v}"
           else
-            raw_version="${INPUT_VERSION:-0.1.9}"
+            raw_version="${INPUT_VERSION:-0.1.10}"
             version="${raw_version#v}"
             tag="v${version}"
           fi
@@ -87,7 +87,7 @@ jobs:
           {
             echo "version=${version}"
             echo "tag=${tag}"
-            echo "release_name=T3 Code ${tag}"
+            echo "release_name=Uqori ${tag}"
             echo "is_prerelease=${is_prerelease}"
             echo "release_channel=${release_channel}"
             echo "ref=${GITHUB_SHA}"
@@ -305,19 +305,19 @@ jobs:
           REF: ${{ needs.build_bundle.outputs.ref }}
         run: |
           cat > release-notes.md <<EOF
-          ## T3 Code v${VERSION}
+          ## Uqori v${VERSION}
 
-          Built from commit \`${REF}\` with **Cross-Project Subagent Delegation** and **Orchestrate Mode** (\`default\` / \`plan\` / \`orchestrate\`).
+          Built from commit \`${REF}\` with **Cross-Project Subagent Delegation** and **Orchestrate Mode** (\`default\` / \`plan\` / \`orchestrate\`), using independent bundle ID \`com.uqori.app\`, Electron profile \`uqori-v2\`, and state directory \`~/.uqori\` so it runs side-by-side with T3 Code.
 
           ### Included Downloads
-          - **macOS (Apple Silicon / M1–M4)**: \`T3-Code-${VERSION}-arm64.dmg\` / \`.zip\` + \`t3-${VERSION}-darwin-arm64.tar.gz\`
-          - **macOS (Intel)**: \`T3-Code-${VERSION}-x64.dmg\` / \`.zip\`
-          - **Windows (x64)**: \`T3-Code-${VERSION}-x64.exe\` + \`t3-${VERSION}-win32-x64.zip\`
-          - **Linux (x64)**: \`T3-Code-${VERSION}-x86_64.AppImage\` / \`.deb\` + \`t3-${VERSION}-linux-x64.tar.gz\`
+          - **macOS (Apple Silicon / M1–M4)**: \`Uqori-${VERSION}-arm64.dmg\` / \`.zip\` + \`t3-${VERSION}-darwin-arm64.tar.gz\`
+          - **macOS (Intel)**: \`Uqori-${VERSION}-x64.dmg\` / \`.zip\`
+          - **Windows (x64)**: \`Uqori-${VERSION}-x64.exe\` + \`t3-${VERSION}-win32-x64.zip\`
+          - **Linux (x64)**: \`Uqori-${VERSION}-x86_64.AppImage\` / \`Uqori-${VERSION}-amd64.deb\` + \`t3-${VERSION}-linux-x64.tar.gz\`
 
-          > **macOS 安装提示（未公证社区构建）**：将 App 拖入 \`/Applications\` 后若提示无法打开或已损坏，请在终端执行一次：
+          > **macOS 安装提示（未公证社区构建）**：将 \`Uqori.app\` 拖入 \`/Applications\` 后若提示无法打开或已损坏，请在终端执行一次：
           > \`\`\`bash
-          > xattr -cr "/Applications/T3 Code (Beta).app"
+          > xattr -cr "/Applications/Uqori.app"
           > \`\`\`
           EOF
           sed -i 's/^          //' release-notes.md

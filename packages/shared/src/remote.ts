@@ -4,7 +4,7 @@ const PAIRING_TOKEN_PARAM = "token";
 const HOSTED_PAIRING_HOST_PARAM = "host";
 const HOSTED_PAIRING_LABEL_PARAM = "label";
 const PAIRING_APP_LINK_PARAM = "pairingUrl";
-const APP_LINK_PROTOCOL = /^t3code(?:-[a-z]+)?:$/;
+const APP_LINK_PROTOCOL = /^(?:uqori|t3code)(?:-[a-z]+)?:$/;
 const SUPPORTED_REMOTE_BACKEND_PROTOCOLS = new Set(["http:", "https:", "ws:", "wss:"]);
 
 export const readHashParams = (url: URL): URLSearchParams =>

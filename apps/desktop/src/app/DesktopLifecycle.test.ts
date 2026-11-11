@@ -258,16 +258,16 @@ describe("DesktopLifecycle", () => {
         return yield* Deferred.await(relaunched);
       }).pipe(
         Effect.provide(layer),
-        Effect.provideService(HostProcess.ExecutablePath, "/opt/T3 Code/t3code"),
+        Effect.provideService(HostProcess.ExecutablePath, "/opt/Uqori/uqori"),
         Effect.provideService(HostProcess.Arguments, [
-          "/opt/T3 Code/t3code",
+          "/opt/Uqori/uqori",
           "--no-sandbox",
-          "T3CODE://pair?token=spent",
-          "t3code://new?prompt=hello",
+          "UQORI://pair?token=spent",
+          "uqori://new?prompt=hello",
         ]),
       );
 
-      assert.deepEqual(options, { execPath: "/opt/T3 Code/t3code", args: ["--no-sandbox"] });
+      assert.deepEqual(options, { execPath: "/opt/Uqori/uqori", args: ["--no-sandbox"] });
     }),
   );
 
