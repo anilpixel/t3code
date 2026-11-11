@@ -598,7 +598,11 @@ const makeLaptop = (
       Layer.provide(Layer.mock(ProviderRegistry.ProviderRegistry)({})),
       Layer.provide(Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({})),
       Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
-      Layer.provide(Layer.mock(ProjectService.ProjectService)({})),
+      Layer.provide(
+        Layer.mock(ProjectService.ProjectService)({
+          getById: () => Effect.succeedNone,
+        }),
+      ),
       Layer.provide(Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({})),
       Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
       Layer.provide(Layer.mock(ThreadLaunch.ThreadLaunchService)({})),
@@ -1914,7 +1918,7 @@ it.effect("a task whose thread there has no run ends with its last reply", () =>
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
 
-it.effect("a local task runs in this thread's project", () =>
+it.effect("rejects a local task targeting a missing project", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const offers = yield* SubscriptionRef.make<
