@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 
 import {
+  buildOrchestrateTurnInstructions,
   T3_CODE_DEVICE_TOOL_INSTRUCTIONS,
   T3_CODE_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH,
   T3_CODE_ORCHESTRATION_INSTRUCTIONS,
@@ -68,7 +69,7 @@ describe("T3 device instructions", () => {
     assert.equal(laterRun(true), "Check the login screen.");
   });
 
-  it("reach ACP agents again when device access changes mid-thread", () => {
+  it("reach ACP agents again when device access or orchestrate mode changes mid-thread", () => {
     const state = { interactionMode: "default", hasT3Mcp: true, hasDeviceTools: false } as const;
     const withDevices = t3AcpPromptWithInstructions({
       prompt: "Check the login screen.",
@@ -81,5 +82,35 @@ describe("T3 device instructions", () => {
       "Again.",
     );
     assert.notInclude(t3AcpPromptWithInstructions({ prompt: "Hi.", state }), "## T3 Code devices");
+
+    const orchestrateState = { ...state, interactionMode: "orchestrate" as const };
+    const enteredOrchestrate = t3AcpPromptWithInstructions({
+      prompt: "Add discount across backend and frontend.",
+      state: orchestrateState,
+      previousState: state,
+    });
+    assert.include(enteredOrchestrate, "## T3 Code interaction mode: Orchestrate");
+    const exitedOrchestrate = t3AcpPromptWithInstructions({
+      prompt: "Fix typo locally.",
+      state,
+      previousState: orchestrateState,
+    });
+    assert.include(exitedOrchestrate, "## T3 Code interaction mode: Default");
+  });
+
+  it("formats registered projects with current project first in orchestrate turn instructions", () => {
+    const block = buildOrchestrateTurnInstructions({
+      currentProjectId: "proj-hub",
+      projects: [
+        { id: "proj-web", title: "web-client", workspaceRoot: "/home/user/web-client" },
+        { id: "proj-hub", title: "workspace-hub", workspaceRoot: "/home/user/workspace-hub" },
+      ],
+    });
+    assert.include(block, "<t3_code_orchestrate_mode>");
+    assert.include(block, "`delegate_task`");
+    assert.include(
+      block,
+      "- workspace-hub (projectId: `proj-hub`, workspaceRoot: `/home/user/workspace-hub`, current)\n- web-client (projectId: `proj-web`, workspaceRoot: `/home/user/web-client`)",
+    );
   });
 });

@@ -15,6 +15,7 @@ import {
   type ModelSelection,
   type ProviderDriverKind,
   type ProviderInstanceId,
+  type ProviderInteractionMode,
   type RuntimeMode,
   type ServerProvider,
 } from "@t3tools/contracts";
@@ -57,6 +58,9 @@ export function ComposerControlsBar(props: {
   defaultRuntimeMode: RuntimeMode | undefined;
   compatibleRuntimeModeOptions: ReadonlyArray<RuntimeModeOption>;
   handleRuntimeModeChange: (mode: RuntimeMode) => void;
+  interactionMode: ProviderInteractionMode;
+  handleInteractionModeChange: (mode: ProviderInteractionMode) => void;
+  onToggleOrchestrateMode: () => void;
   composerControlsCollapsed: boolean;
   composerControlsHidden: boolean;
   restingHiddenBlockCount: number;
@@ -101,6 +105,9 @@ export function ComposerControlsBar(props: {
     defaultRuntimeMode,
     compatibleRuntimeModeOptions,
     handleRuntimeModeChange,
+    interactionMode,
+    handleInteractionModeChange,
+    onToggleOrchestrateMode,
     composerControlsCollapsed,
     composerControlsHidden,
     restingHiddenBlockCount: measuredHiddenBlockCount,
@@ -140,6 +147,7 @@ export function ComposerControlsBar(props: {
     matchesDefault: accessMatchesDefault || props.permissionsShownInStrip,
     collapsed: composerControlsCollapsed,
     measuredHiddenBlockCount,
+    showOrchestrateToggle: true,
   });
   const controlSize = composerControlsCollapsed ? "xs" : "sm";
   const traitsInput = resolveComposerTraitsInput({
@@ -163,11 +171,14 @@ export function ComposerControlsBar(props: {
             <ComposerFooterModeControls
               runtimeMode={compatibleRuntimeMode}
               runtimeModeOptions={compatibleRuntimeModeOptions}
+              interactionMode={interactionMode}
+              showOrchestrateToggle
               size={controlSize}
               hidden={composerControlsHidden || restingHiddenBlockCount > 0}
               accessDisplay={accessDisplay}
               emphasized={!accessMatchesDefault}
               onRuntimeModeChange={handleRuntimeModeChange}
+              onToggleOrchestrateMode={onToggleOrchestrateMode}
             />
           ),
         },
@@ -220,6 +231,8 @@ export function ComposerControlsBar(props: {
           runtimeMode={compatibleRuntimeMode}
           runtimeModeOptions={compatibleRuntimeModeOptions}
           onRuntimeModeChange={handleRuntimeModeChange}
+          interactionMode={interactionMode}
+          onToggleOrchestrateMode={onToggleOrchestrateMode}
         />
       }
       terminalOpen={terminalOpen}
@@ -291,11 +304,14 @@ export function ComposerControlsBar(props: {
           <CompactComposerControlsMenu
             runtimeMode={compatibleRuntimeMode}
             runtimeModeOptions={compatibleRuntimeModeOptions}
+            interactionMode={interactionMode}
             size={controlSize}
             hidden={composerControlsHidden || hiddenRestingBlockIds.length === 0}
             // Permissions join the overflow only when their normal home is in it.
             showPermissions={overflowShowsPermissions}
+            showOrchestrate={hiddenRestingBlockIds.length > 0}
             onRuntimeModeChange={handleRuntimeModeChange}
+            onInteractionModeChange={handleInteractionModeChange}
           />
         </div>
       </>

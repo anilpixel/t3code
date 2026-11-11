@@ -1322,9 +1322,18 @@ const make = Effect.gen(function* () {
       Effect.catchIf(
         (error) => error.code === "provider_unavailable",
         () =>
-          providerRegistry
-            .refreshInstance(instanceId)
-            .pipe(Effect.flatMap((providers) => resolveTarget({ ...input, providers }))),
+          Effect.gen(function* () {
+            let providers = yield* providerRegistry.refreshInstance(instanceId);
+            const fallbackInstanceId = input.targetProject?.defaultModelSelection?.instanceId;
+            if (
+              input.target?.providerInstanceId === undefined &&
+              fallbackInstanceId !== undefined &&
+              fallbackInstanceId !== instanceId
+            ) {
+              providers = yield* providerRegistry.refreshInstance(fallbackInstanceId);
+            }
+            return yield* resolveTarget({ ...input, providers });
+          }),
       ),
     );
   };
@@ -1333,9 +1342,23 @@ const make = Effect.gen(function* () {
     readonly parent: Pick<OrchestrationV2ThreadProjection, "thread">;
     readonly target: OrchestratorMcpTarget | undefined;
     readonly providers: ReadonlyArray<ServerProvider>;
+    readonly targetProject?: Effect.Success<ReturnType<typeof requireProject>> | undefined;
     /** Receipt replays bypass current settings because they start no work. Dispatch must reuse the checked command ID. */
     readonly skipProjectEnablementFilter?: boolean;
   }): Effect.fn.Return<ResolvedTarget, OrchestratorMcpFailure> {
+    const projectId = input.targetProject?.id ?? input.parent.thread.projectId;
+    const parentSelection = input.parent.thread.modelSelection;
+    const parentEnabledForTargetProject =
+      input.targetProject === undefined ||
+      input.targetProject.id === input.parent.thread.projectId ||
+      (yield* threadManagement.isProviderInstanceEnabledForProject({
+        projectId,
+        instanceId: parentSelection.instanceId,
+      }));
+    const inheritedSelection =
+      !parentEnabledForTargetProject && input.targetProject?.defaultModelSelection != null
+        ? input.targetProject.defaultModelSelection
+        : parentSelection;
     const requestedInstanceId = input.target?.providerInstanceId;
     const requestedDriver = input.target?.driverKind;
     const orchestrationCapableInstanceIds = yield* loadOrchestrationCapableInstanceIds();
@@ -1357,7 +1380,7 @@ const make = Effect.gen(function* () {
         (candidate) => providerConstraints(candidate, true).length === 0,
       );
       const inheritedCandidate = healthyCandidates.find(
-        (candidate) => candidate.instanceId === input.parent.thread.modelSelection.instanceId,
+        (candidate) => candidate.instanceId === inheritedSelection.instanceId,
       );
       const orderedCandidates = [
         ...(inheritedCandidate === undefined ? [] : [inheritedCandidate]),
@@ -1367,7 +1390,7 @@ const make = Effect.gen(function* () {
         const enabledForProject =
           input.skipProjectEnablementFilter === true ||
           (yield* threadManagement.isProviderInstanceEnabledForProject({
-            projectId: input.parent.thread.projectId,
+            projectId,
             instanceId: candidate.instanceId,
           }));
         if (enabledForProject) {
@@ -1384,7 +1407,7 @@ const make = Effect.gen(function* () {
         );
       }
     }
-    instanceId ??= input.parent.thread.modelSelection.instanceId;
+    instanceId ??= inheritedSelection.instanceId;
 
     const provider = input.providers.find((candidate) => candidate.instanceId === instanceId);
     if (provider === undefined) {
@@ -1410,7 +1433,6 @@ const make = Effect.gen(function* () {
       );
     }
 
-    const inheritedSelection = input.parent.thread.modelSelection;
     const requestedModel = input.target?.model;
     const model =
       requestedModel ??
@@ -2412,15 +2434,9 @@ const make = Effect.gen(function* () {
           : readTask(scope, taskId, false, true);
       }
       const { scope, parent } = yield* loadThreadCaller(callerScope, "delegate_task");
-      if (
-        input.target?.projectId !== undefined &&
-        input.target.projectId !== parent.thread.projectId
-      ) {
-        return yield* failure(
-          "invalid_request",
-          "A local task runs in this thread's project. Omit target.projectId, or pass target.environmentId to run it in that environment's project.",
-        );
-      }
+      const targetProjectId = input.target?.projectId ?? parent.thread.projectId;
+      const isCrossProject = targetProjectId !== parent.thread.projectId;
+      const targetProject = isCrossProject ? yield* requireProject(targetProjectId) : undefined;
       const parentRun = parent.runs
         .filter(ThreadManagementService.isActiveRun)
         .toSorted((left, right) => right.ordinal - left.ordinal)[0];
@@ -2446,6 +2462,7 @@ const make = Effect.gen(function* () {
         parent,
         target: input.target,
         providers,
+        targetProject,
         skipProjectEnablementFilter: isRetryOfAcceptedDelegation,
       });
       const runtimeMode = yield* resolveRuntimeMode(
@@ -2459,21 +2476,29 @@ const make = Effect.gen(function* () {
       );
       let workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy | undefined;
       if (input.isolation === "worktree" && !isRetryOfAcceptedDelegation) {
-        const project = yield* requireProject(parent.thread.projectId);
+        const project = targetProject ?? (yield* requireProject(parent.thread.projectId));
+        const checkoutCwd = isCrossProject
+          ? project.workspaceRoot
+          : (parent.thread.worktreePath ?? project.workspaceRoot);
         const base = yield* gitDriver
           .resolveCommit({
-            cwd: parent.thread.worktreePath ?? project.workspaceRoot,
+            cwd: checkoutCwd,
             revision: "HEAD",
           })
           .pipe(
             Effect.mapError(() =>
-              failure("invalid_request", "Unable to resolve the parent checkout commit."),
+              failure(
+                "invalid_request",
+                isCrossProject
+                  ? `Unable to resolve the target project checkout commit in "${project.title}".`
+                  : "Unable to resolve the parent checkout commit.",
+              ),
             ),
           );
         // Launch preparation creates the worktree from the project root, so a
         // parent checkout in another repository (such as a Git folder inside
         // Scratch) would hand it a commit it cannot find.
-        if (parent.thread.worktreePath !== null) {
+        if (!isCrossProject && parent.thread.worktreePath !== null) {
           yield* gitDriver
             .resolveCommit({ cwd: project.workspaceRoot, revision: base.commitSha })
             .pipe(
@@ -2499,6 +2524,7 @@ const make = Effect.gen(function* () {
           parentThreadId: scope.thread.threadId,
           parentRunId: parentRun.id,
           parentNodeId: parentRun.rootNodeId,
+          ...(isCrossProject ? { targetProjectId } : {}),
           task: taskPrompt(input),
           ...(input.title === undefined ? {} : { title: input.title }),
           modelSelection: target.modelSelection,

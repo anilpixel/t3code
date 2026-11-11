@@ -67,6 +67,56 @@ const T3_CODE_ACP_PLAN_MODE_INSTRUCTIONS = `## T3 Code interaction mode: Plan
 
 Investigate with read-only actions and do not edit files or otherwise execute the implementation. Resolve discoverable facts before asking questions. When the requirements are decision complete, return a concrete implementation plan and do not start implementing it. Treat this mode as active until T3 Code supplies a different interaction-mode instruction.`;
 
+const T3_CODE_ACP_ORCHESTRATE_MODE_INSTRUCTIONS = `## T3 Code interaction mode: Orchestrate
+
+Coordinate work across projects as the lead orchestrator instead of editing repository files directly in this thread unless the user explicitly asks you to edit directly here. Break work down by project, dispatch implementation and verification to subagents via \`delegate_task\` with \`target: { projectId }\` (using \`isolation: "worktree"\` for code edits), never mutate sibling repositories via shell \`cd\` paths, and synthesize their results. Treat this mode as active until T3 Code supplies a different interaction-mode instruction.`;
+
+export interface OrchestrateProjectSummary {
+  readonly id: string;
+  readonly title: string;
+  readonly workspaceRoot: string;
+}
+
+const MAX_INLINE_ORCHESTRATE_PROJECTS = 30;
+
+export function buildOrchestrateTurnInstructions(input: {
+  readonly currentProjectId: string;
+  readonly projects: ReadonlyArray<OrchestrateProjectSummary>;
+}): string {
+  const ordered = [
+    ...input.projects.filter((project) => project.id === input.currentProjectId),
+    ...input.projects.filter((project) => project.id !== input.currentProjectId),
+  ];
+  const shown = ordered.slice(0, MAX_INLINE_ORCHESTRATE_PROJECTS);
+  const omitted = ordered.length - shown.length;
+  const projectLines =
+    shown.length === 0
+      ? ["- (No active projects found; call `t3_project_list` to inspect projects.)"]
+      : [
+          ...shown.map(
+            (project) =>
+              `- ${project.title} (projectId: \`${project.id}\`, workspaceRoot: \`${project.workspaceRoot}\`${project.id === input.currentProjectId ? ", current" : ""})`,
+          ),
+          ...(omitted > 0
+            ? [`- (+${omitted} more projects available via \`t3_project_list\`)`]
+            : []),
+        ];
+  return [
+    "<t3_code_orchestrate_mode>",
+    "## T3 Code interaction mode: Orchestrate",
+    "",
+    "You are acting as the cross-project orchestrator for this turn:",
+    "- Clarify requirements only if a missing decision would materially change the outcome; otherwise decompose the goal across the relevant projects.",
+    '- Dispatch implementation, file edits, and test runs to subagents with `delegate_task` (`target: { projectId }`, using `isolation: "worktree"` for isolated code changes). Call `orchestrator_capabilities` once per thread before your first `delegate_task`.',
+    "- Do not edit repository files directly in this orchestrator thread unless the user explicitly asks you to edit here, and never cross into other repositories via shell paths (`cd ../...`). Read-only inspection and T3 orchestration tools are allowed.",
+    "- Orchestrate mode applies only to turns carrying `<t3_code_orchestrate_mode>`. If a later turn omits this block, return to normal Default build mode and carry out edits directly.",
+    "",
+    "Registered projects in this environment:",
+    ...projectLines,
+    "</t3_code_orchestrate_mode>",
+  ].join("\n");
+}
+
 export interface T3AcpInstructionState {
   readonly interactionMode: ProviderInteractionMode;
   readonly hasT3Mcp: boolean;
@@ -88,10 +138,14 @@ export function t3AcpPromptWithInstructions(input: {
   ) {
     return input.prompt;
   }
-  const instructions = [
+  const modeInstructions =
     input.state.interactionMode === "plan"
       ? T3_CODE_ACP_PLAN_MODE_INSTRUCTIONS
-      : T3_CODE_ACP_DEFAULT_MODE_INSTRUCTIONS,
+      : input.state.interactionMode === "orchestrate"
+        ? T3_CODE_ACP_ORCHESTRATE_MODE_INSTRUCTIONS
+        : T3_CODE_ACP_DEFAULT_MODE_INSTRUCTIONS;
+  const instructions = [
+    modeInstructions,
     ...(input.state.hasT3Mcp
       ? [
           T3_CODE_BROWSER_TOOL_INSTRUCTIONS.trim(),

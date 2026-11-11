@@ -155,12 +155,25 @@ export function createWorkspaceFocusController(doc: Document) {
       isConversation ? undefined : fallback,
       area,
     ]);
+    const markKeyboardFocus = (element: HTMLElement) => {
+      element.setAttribute("data-workspace-kbd-focus", "true");
+      element.addEventListener(
+        "blur",
+        () => {
+          element.removeAttribute("data-workspace-kbd-focus");
+        },
+        { once: true },
+      );
+    };
     for (const target of targets) {
       if (!target) continue;
       target.focus({ preventScroll: true });
       const root = target.getRootNode();
       const active = root instanceof ShadowRoot ? root.activeElement : doc.activeElement;
       if (active === target || (active && target.contains(active))) {
+        if (target !== area) {
+          markKeyboardFocus(active instanceof HTMLElement ? active : target);
+        }
         if (target !== area && !isConversation) revealInScrollers(target);
         return true;
       }
@@ -191,7 +204,18 @@ export function createWorkspaceFocusController(doc: Document) {
       const target = area.querySelector<HTMLElement>(selector);
       if (!target || !isWorkspaceElementVisible(target)) return false;
       target.focus({ preventScroll: true });
-      return doc.activeElement === target;
+      if (doc.activeElement === target) {
+        target.setAttribute("data-workspace-kbd-focus", "true");
+        target.addEventListener(
+          "blur",
+          () => {
+            target.removeAttribute("data-workspace-kbd-focus");
+          },
+          { once: true },
+        );
+        return true;
+      }
+      return false;
     }
     return focusArea(area, restore);
   };

@@ -29,6 +29,7 @@ import type {
   ThreadContextRecord,
   EnvironmentContextRecord,
   ResolvedKeybindingsConfig,
+  ProviderInteractionMode,
   RuntimeMode,
   RuntimeRequestId,
   ScopedThreadRef,
@@ -81,7 +82,10 @@ import {
   extendReplacementRangeForTrailingSpace,
   replaceTextRange,
 } from "../../composer-logic";
-import { DEFAULT_COMPOSER_PLACEHOLDER } from "../../composerPlaceholder";
+import {
+  DEFAULT_COMPOSER_PLACEHOLDER,
+  ORCHESTRATE_COMPOSER_PLACEHOLDER,
+} from "../../composerPlaceholder";
 import { deriveComposerSendState, getAntigravitySendBlockReason } from "../ChatView.logic";
 import {
   dataTransferHasComposerMention,
@@ -330,6 +334,8 @@ export interface ChatComposerHandle {
   };
   validateProviderInput: (providerInput: string) => boolean;
   setMultipleModelSelections: (selections: ReadonlyArray<ModelSelection>) => void;
+  getInteractionMode: () => ProviderInteractionMode;
+  toggleOrchestrateMode: () => void;
 }
 
 export interface ChatComposerProps {
@@ -401,6 +407,7 @@ export interface ChatComposerProps {
 
   runtimeMode: RuntimeMode;
   defaultRuntimeMode?: RuntimeMode;
+  interactionMode: ProviderInteractionMode;
 
   lockedProvider: ProviderDriverKind | null;
   providerStatuses: ServerProvider[];
@@ -469,6 +476,8 @@ export interface ChatComposerProps {
   onOpenProviderSetup: (instanceId: ProviderInstanceId) => void;
   getModelDisabledReason: (instanceId: ProviderInstanceId, model: string) => string | null;
   handleRuntimeModeChange: (mode: RuntimeMode) => void;
+  handleInteractionModeChange: (mode: ProviderInteractionMode) => void;
+  onToggleOrchestrateMode: () => void;
 
   focusComposer: () => void;
   scheduleComposerFocus: () => void;
@@ -520,6 +529,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activePendingQuestionIndex,
     respondingRequestIds,
     runtimeMode,
+    interactionMode,
     lockedProvider,
     providerStatuses,
     providerCatalogKnown,
@@ -560,6 +570,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     onOpenProviderSetup,
     getModelDisabledReason,
     handleRuntimeModeChange,
+    handleInteractionModeChange,
+    onToggleOrchestrateMode,
     focusComposer,
     scheduleComposerFocus,
     setThreadError,
@@ -1092,6 +1104,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     pullRequestProjectId,
     pullRequestRepository,
     threadPullRequests,
+    interactionMode,
     sideChatAvailable: props.sideChatAvailable === true,
     sideChatDisabledReason: props.sideChatDisabledReason ?? null,
     freshSessionAvailable: props.onFreshSession !== undefined,
@@ -1870,6 +1883,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         }
         return;
       }
+      if (item.command === "orchestrate" || item.command === "default") {
+        const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
+          expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+        });
+        if (applied) {
+          setComposerHighlightedItemId(null);
+          handleInteractionModeChange(item.command);
+        }
+        return;
+      }
       if (item.command === "clear") {
         const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
           expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
@@ -2247,7 +2270,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     !isComposerApprovalState &&
     !activePendingProgress &&
     !projectSelectionRequired &&
-    !showProviderUnavailable
+    !showProviderUnavailable &&
+    interactionMode !== "orchestrate"
       ? promptSuggestion
       : null;
 
@@ -2288,6 +2312,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       submitComposer,
       promptSuggestion: offeredPromptSuggestion,
       dismissPromptSuggestion,
+      toggleOrchestrateMode: onToggleOrchestrateMode,
     })(key, event, isTaskItem);
 
   const {
@@ -2382,6 +2407,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       defaultRuntimeMode={props.defaultRuntimeMode}
       compatibleRuntimeModeOptions={compatibleRuntimeModeOptions}
       handleRuntimeModeChange={handleRuntimeModeChange}
+      interactionMode={interactionMode}
+      handleInteractionModeChange={handleInteractionModeChange}
+      onToggleOrchestrateMode={onToggleOrchestrateMode}
       composerControlsCollapsed={composerControlsCollapsed}
       effortDisplay={settings.effortDisplay}
       permissionsShownInStrip={props.permissionsShownInStrip}
@@ -3057,6 +3085,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         selectedModel,
         selectedProviderModels,
       }),
+      getInteractionMode: () => interactionMode,
+      toggleOrchestrateMode: onToggleOrchestrateMode,
       setMultipleModelSelections,
       validateProviderInput: (providerInput: string) => {
         const validationMessage = getComposerSubmissionValidationMessage({
@@ -3119,6 +3149,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       selectedProvider,
       selectedProviderModels,
       compactThreadContextStable,
+      interactionMode,
+      onToggleOrchestrateMode,
     ],
   );
 
@@ -3291,7 +3323,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   aria-label="Expand composer"
                 >
                   {prompt.trim() ||
-                    (showProviderUnavailable ? "Enable a provider in Settings" : "Ask anything...")}
+                    (showProviderUnavailable
+                      ? "Enable a provider in Settings"
+                      : interactionMode === "orchestrate"
+                        ? ORCHESTRATE_COMPOSER_PLACEHOLDER
+                        : "Ask anything...")}
                 </button>
                 {collapsedComposerImagePreviews}
                 <button
@@ -3456,7 +3492,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                             ? "Choose a project above to start a thread"
                             : showProviderUnavailable
                               ? "Enable a provider in Settings to send a message"
-                              : (offeredPromptSuggestion ?? DEFAULT_COMPOSER_PLACEHOLDER)
+                              : interactionMode === "orchestrate"
+                                ? ORCHESTRATE_COMPOSER_PLACEHOLDER
+                                : (offeredPromptSuggestion ?? DEFAULT_COMPOSER_PLACEHOLDER)
                     }
                     placeholderSuffix={
                       offeredPromptSuggestion !== null ? (

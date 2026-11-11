@@ -65,6 +65,12 @@ export function hasProviderSetup(status: ServerProvider): boolean {
   );
 }
 
+export function getProviderBannerSetupActionLabel(status: ServerProvider): string | null {
+  if (hasProviderSetup(status)) return "Open provider setup";
+  if (status.status === "error") return "Open provider settings";
+  return null;
+}
+
 export function getProviderStatusMessage(status: ServerProvider): string {
   if (
     status.auth.status !== "unauthenticated" &&
@@ -138,9 +144,10 @@ export const ProviderStatusBanner = memo(function ProviderStatusBanner({
   const message = incompatible?.message ?? getProviderStatusMessage(status);
   const isWarning =
     incompatible?.status !== "broken" && (status.status === "warning" || incompatible !== null);
+  const setupActionLabel = getProviderBannerSetupActionLabel(status);
 
   return (
-    <div className="pointer-events-auto mx-auto w-fit max-w-[calc(100%-2rem)] pt-3">
+    <div className="pointer-events-auto mx-auto w-fit max-w-[min(var(--chat-content-max-width,48rem),calc(100%-2rem))] pt-3">
       <Alert
         variant={isWarning ? "warning" : "error"}
         role={incompatible && incompatible.status !== "broken" ? "status" : "alert"}
@@ -158,9 +165,9 @@ export const ProviderStatusBanner = memo(function ProviderStatusBanner({
               </TooltipPopup>
             </Tooltip>
             <div className="flex flex-wrap items-center justify-end gap-3">
-              {onOpenProviderSetup && hasProviderSetup(status) ? (
+              {onOpenProviderSetup && setupActionLabel !== null ? (
                 <InlineButton onClick={() => onOpenProviderSetup(status.instanceId)}>
-                  Open provider setup
+                  {setupActionLabel}
                 </InlineButton>
               ) : null}
               <Button

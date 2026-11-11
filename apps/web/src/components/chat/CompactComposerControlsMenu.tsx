@@ -1,25 +1,34 @@
-import type { RuntimeMode } from "@t3tools/contracts";
+import type { ProviderInteractionMode, RuntimeMode } from "@t3tools/contracts";
 import { memo, useRef } from "react";
 import { EllipsisIcon } from "lucide-react";
 import { Menu, MenuPopup, MenuTrigger } from "../ui/menu";
 import { ComposerControl, ComposerControlIcon } from "./ComposerControl";
 import { focusRequestedPermission, useComposerMenuProps } from "./composerEventScope";
 import { useComposerMenuState } from "./useComposerMenuState";
-import { ComposerPermissionsSection, type RuntimeModeOption } from "./ComposerFooterControls";
+import {
+  ComposerOrchestrateSection,
+  ComposerPermissionsSection,
+  type RuntimeModeOption,
+} from "./ComposerFooterControls";
 
 export const CompactComposerControlsMenu = memo(function CompactComposerControlsMenu(props: {
   runtimeMode: RuntimeMode;
   runtimeModeOptions: ReadonlyArray<RuntimeModeOption>;
+  interactionMode?: ProviderInteractionMode;
   showPermissions: boolean;
+  showOrchestrate?: boolean;
   size?: "sm" | "xs";
   /** Close the portaled popup when its trigger hides. */
   hidden?: boolean;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
+  onInteractionModeChange?: (mode: ProviderInteractionMode) => void;
 }) {
   const composerFloatingLayerProps = useComposerMenuProps();
   const size = props.size ?? "sm";
   const [open, setOpen] = useComposerMenuState(props.hidden);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const showOrchestrateSection =
+    props.showOrchestrate === true && props.onInteractionModeChange !== undefined;
 
   return (
     <Menu
@@ -46,6 +55,15 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
             runtimeMode={props.runtimeMode}
             runtimeModeOptions={props.runtimeModeOptions}
             onRuntimeModeChange={props.onRuntimeModeChange}
+          />
+        ) : null}
+        {props.showPermissions && showOrchestrateSection ? (
+          <div className="mx-2 my-1 border-t border-border/60" />
+        ) : null}
+        {showOrchestrateSection && props.onInteractionModeChange ? (
+          <ComposerOrchestrateSection
+            interactionMode={props.interactionMode ?? "default"}
+            onInteractionModeChange={props.onInteractionModeChange}
           />
         ) : null}
       </MenuPopup>

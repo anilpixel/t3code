@@ -33,6 +33,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -67,7 +68,7 @@ import * as RemoteDelegation from "../peer/RemoteDelegation.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import { idleThreadProjection, liveThreadShell } from "./McpToolAccess.testkit.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
-import { resolveRuntimeMode } from "./delegatedTaskModes.ts";
+import { resolveInteractionMode, resolveRuntimeMode } from "./delegatedTaskModes.ts";
 import type { ProjectionRecordFilter } from "../orchestration-v2/ProjectionStore.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
@@ -3329,6 +3330,220 @@ describe("OrchestratorMcpService provider resolution", () => {
     }),
   );
 
+  it.effect(
+    "delegates across local projects with cleared parent checkout, target default model fallback, and target worktree resolution",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const altInstanceId = ProviderInstanceId.make("codex-alt");
+          const driver = ProviderDriverKind.make("codex");
+          const targetProjectId = ProjectId.make("project:target");
+          const missingProjectId = ProjectId.make("project:missing");
+          const resolvedCwds = yield* Ref.make<ReadonlyArray<string>>([]);
+          const preparedRuns = yield* Ref.make<ReadonlyArray<string>>([]);
+          const layerRegistry = ProviderAdapterRegistry.layerFromAdapters(
+            [codexInstanceId, altInstanceId].map((instanceId) => ({
+              instanceId,
+              driver,
+              getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
+              planSelectionTransition: () =>
+                Effect.succeed({ type: "apply_on_next_turn" as const }),
+              openSession: () =>
+                Effect.die("These tests exercise committed commands before provider execution."),
+            })),
+          );
+          const layerDatabase = SqlitePersistence.layerMemory;
+          const layerOrchestrator = ProviderReplayHarness.layerWithRegistry(
+            { name: "mcp-cross-project-delegate" },
+            layerRegistry,
+            { databaseLayer: layerDatabase, runEffectWorker: false },
+          );
+          const layerSettings = ServerSettings.layerTest({
+            providerInstances: {
+              [codexInstanceId]: { driver: "codex", enabled: true },
+              [altInstanceId]: { driver: "codex", enabled: true },
+            },
+          });
+          const layerThreads = ThreadManagementService.layer.pipe(
+            Layer.provideMerge(layerOrchestrator),
+            Layer.provide(
+              LegacyV1ThreadImporter.layer.pipe(
+                Layer.provide(layerOrchestrator),
+                Layer.provide(layerDatabase),
+              ),
+            ),
+            Layer.provide(CommandReceiptStore.layer.pipe(Layer.provide(layerDatabase))),
+            Layer.provideMerge(layerSettings),
+          );
+          const serviceLayer = OrchestratorMcpService.layer.pipe(
+            Layer.provideMerge(layerThreads),
+            Layer.provide(
+              Layer.mergeAll(
+                NodeServices.layer,
+                NodeCrypto.layer,
+                layerRegistry,
+                layerSettings,
+                providerRegistryLayer([
+                  providerSnapshot({ instanceId: codexInstanceId, driver, model: "gpt-5.4" }),
+                  providerSnapshot({ instanceId: altInstanceId, driver, model: "gpt-5.5" }),
+                ]),
+                Layer.mock(ThreadLaunchService.ThreadLaunchService)({
+                  prepareRun: ({ threadId, runId }) =>
+                    Ref.update(preparedRuns, (entries) => [...entries, `${threadId}:${runId}`]),
+                }),
+                Layer.mock(GitVcsDriver.GitVcsDriver)({
+                  resolveCommit: ({ cwd }) =>
+                    Ref.update(resolvedCwds, (entries) => [...entries, cwd]).pipe(
+                      Effect.flatMap(() =>
+                        cwd === "/repo/target"
+                          ? Effect.succeed({ commitSha: "target-head-sha" })
+                          : Effect.fail(
+                              new GitCommandError({
+                                operation: "resolveCommit",
+                                command: "git rev-parse HEAD",
+                                cwd,
+                                detail: "unexpected cwd",
+                              }),
+                            ),
+                      ),
+                    ),
+                }),
+                Layer.mock(ProjectService.ProjectService)({
+                  getById: (id) =>
+                    Effect.succeed(
+                      id === targetProjectId
+                        ? Option.some({
+                            id: targetProjectId,
+                            title: "Target Project",
+                            workspaceRoot: "/repo/target",
+                            defaultModelSelection: {
+                              instanceId: altInstanceId,
+                              model: "gpt-5.5",
+                            },
+                            scripts: [],
+                            createdAt: DateTime.makeUnsafe(0),
+                            updatedAt: DateTime.makeUnsafe(0),
+                          } as never)
+                        : Option.none(),
+                    ),
+                }),
+                Layer.mock(SecretRequests.SecretRequests)({}),
+                Layer.mock(RemoteDelegation.RemoteDelegation)({}),
+                Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+              ),
+            ),
+          );
+
+          yield* Effect.gen(function* () {
+            const orchestrator = yield* Orchestrator.OrchestratorV2;
+            const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+            const settings = yield* ServerSettings.ServerSettingsService;
+            yield* orchestrator.dispatch({
+              type: "thread.create",
+              createdBy: "user",
+              creationSource: "web",
+              commandId: CommandId.make("parent:create"),
+              threadId: parentThreadId,
+              projectId,
+              title: "Master router",
+              modelSelection: { instanceId: codexInstanceId, model: "gpt-5.4" },
+              runtimeMode: "full-access",
+              interactionMode: "orchestrate",
+              branch: "parent-branch",
+              worktreePath: "/repo/parent-worktree",
+            });
+            yield* orchestrator.dispatch({
+              type: "message.dispatch",
+              createdBy: "user",
+              creationSource: "web",
+              commandId: CommandId.make("parent:start"),
+              threadId: parentThreadId,
+              messageId: MessageId.make("parent:message"),
+              text: "Route tasks across projects.",
+              attachments: [],
+              dispatchMode: { type: "start_immediately" },
+            });
+
+            const missing = yield* service
+              .delegateTask(scope, {
+                task: "Inspect missing project.",
+                target: { projectId: missingProjectId },
+                mode: "async",
+                clientRequestId: "cross-project-missing",
+              })
+              .pipe(Effect.flip);
+            assert.equal(missing.code, "invalid_request");
+            assert.include(missing.message, missingProjectId);
+
+            const shared = yield* service.delegateTask(scope, {
+              task: "Inspect target project in shared checkout.",
+              target: { projectId: targetProjectId },
+              mode: "async",
+              clientRequestId: "cross-project-shared",
+            });
+            const sharedChild = yield* orchestrator.getThreadProjection(shared.childThreadId!);
+            assert.equal(sharedChild.thread.projectId, targetProjectId);
+            assert.equal(sharedChild.thread.interactionMode, "default");
+            assert.equal(sharedChild.thread.branch, null);
+            assert.equal(sharedChild.thread.worktreePath, null);
+            assert.deepEqual(sharedChild.thread.modelSelection, {
+              instanceId: codexInstanceId,
+              model: "gpt-5.4",
+            });
+
+            yield* settings.updateSettings({
+              projectSettingsOverrides: {
+                [targetProjectId]: {
+                  providerInstances: { [codexInstanceId]: { enabled: false } },
+                },
+              },
+            });
+
+            const explicitDisabled = yield* service
+              .delegateTask(scope, {
+                task: "Reject explicit disabled provider in target project.",
+                target: { projectId: targetProjectId, providerInstanceId: codexInstanceId },
+                mode: "async",
+                clientRequestId: "cross-project-explicit-disabled",
+              })
+              .pipe(Effect.flip);
+            assert.equal(explicitDisabled.code, "invalid_request");
+            assert.include(explicitDisabled.message, "disabled");
+
+            const worktreeRequest = {
+              task: "Implement feature in target project worktree.",
+              target: { projectId: targetProjectId, model: "gpt-5.5" },
+              isolation: "worktree" as const,
+              mode: "async" as const,
+              clientRequestId: "cross-project-worktree-fallback",
+            };
+            const worktree = yield* service.delegateTask(scope, worktreeRequest);
+            const retriedWorktree = yield* service.delegateTask(scope, worktreeRequest);
+            assert.deepEqual(retriedWorktree, worktree);
+            const worktreeChild = yield* orchestrator.getThreadProjection(worktree.childThreadId!);
+            assert.equal(worktreeChild.thread.projectId, targetProjectId);
+            assert.equal(worktreeChild.thread.interactionMode, "default");
+            assert.equal(worktreeChild.thread.branch, null);
+            assert.equal(worktreeChild.thread.worktreePath, null);
+            assert.deepEqual(worktreeChild.thread.modelSelection, {
+              instanceId: altInstanceId,
+              model: "gpt-5.5",
+            });
+            assert.deepEqual(worktreeChild.runs[0]?.workspacePreparation, {
+              type: "worktree",
+              baseRef: "target-head-sha",
+              startFromOrigin: false,
+            });
+            assert.deepEqual(yield* Ref.get(resolvedCwds), ["/repo/target"]);
+            assert.deepEqual(yield* Ref.get(preparedRuns), [
+              `${worktree.childThreadId}:${worktreeChild.runs[0]!.id}`,
+              `${worktree.childThreadId}:${worktreeChild.runs[0]!.id}`,
+            ]);
+          }).pipe(Effect.provide(serviceLayer));
+        }),
+      ),
+  );
+
   describe("resolveRuntimeMode", () => {
     const muse = {
       modelSelection: { instanceId: ProviderInstanceId.make("muse"), model: "muse-model" },
@@ -3350,6 +3565,18 @@ describe("OrchestratorMcpService provider resolution", () => {
         assert.equal(yield* resolveRuntimeMode("full-access", "inherit", muse), "full-access");
         assert.equal(yield* resolveRuntimeMode("auto", undefined, muse), "approval-required");
       }),
+    );
+
+    it.effect(
+      "defaults children of an orchestrate parent to build mode while blocking plan escalation",
+      () =>
+        Effect.gen(function* () {
+          assert.equal(yield* resolveInteractionMode("orchestrate", undefined), "default");
+          assert.equal(yield* resolveInteractionMode("orchestrate", "inherit"), "default");
+          assert.equal(yield* resolveInteractionMode("orchestrate", "plan"), "plan");
+          const escalated = yield* resolveInteractionMode("plan", "orchestrate").pipe(Effect.flip);
+          assert.equal(escalated.code, "interaction_mode_escalation_denied");
+        }),
     );
   });
 });

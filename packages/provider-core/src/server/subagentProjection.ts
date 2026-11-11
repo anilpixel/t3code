@@ -12,6 +12,7 @@ import type {
   OrchestrationV2Run,
   OrchestrationV2ThreadProjection,
   OrchestrationV2TurnItem,
+  ProjectId,
   ProviderInstanceId,
   ProviderThreadId,
   ProviderTurnId,
@@ -53,6 +54,7 @@ export function makeSubagentChildThread(input: {
   readonly parentThread: OrchestrationV2AppThread;
   readonly childThreadId: ThreadId;
   readonly parentNodeId: NodeId;
+  readonly targetProjectId?: ProjectId;
   readonly activeProviderThreadId: ProviderThreadId | null;
   readonly providerInstanceId: ProviderInstanceId;
   readonly modelSelection: ModelSelection;
@@ -61,8 +63,13 @@ export function makeSubagentChildThread(input: {
   readonly createdBy: OrchestrationV2Actor;
   readonly creationSource: OrchestrationV2CreationSource;
 }): OrchestrationV2AppThread {
+  const crossProject =
+    input.targetProjectId !== undefined && input.targetProjectId !== input.parentThread.projectId;
   return {
     ...input.parentThread,
+    ...(crossProject
+      ? { projectId: input.targetProjectId!, branch: null, worktreePath: null }
+      : {}),
     createdBy: input.createdBy,
     creationSource: input.creationSource,
     id: input.childThreadId,

@@ -750,8 +750,13 @@ export function ThreadRelationshipsPanel(props: {
     const trailingVisibilityClass = (workflowGroup ? canStopWorkflow : canStop)
       ? "group-hover:opacity-0 group-focus-within:opacity-0 pointer-coarse:opacity-0 [@media(hover:none)]:opacity-0"
       : "";
-    const project = projects.find((project) => project.id === node?.thread?.projectId);
-    const relationshipHint = `Open ${relationship.toLowerCase()} in this chat`;
+    const childProjectId = node?.thread?.projectId ?? agent?.childProjectId;
+    const project = projects.find((project) => project.id === childProjectId);
+    const crossProjectTitle =
+      project && currentProject && project.id !== currentProject.id ? project.title : null;
+    const relationshipHint = crossProjectTitle
+      ? `Open ${relationship.toLowerCase()} in ${crossProjectTitle}`
+      : `Open ${relationship.toLowerCase()} in this chat`;
     const RelationshipPopup = agent ? ThreadHoverCardPopup : TooltipPopup;
     const relationshipTooltip = agent ? (
       <SubagentTooltipContent

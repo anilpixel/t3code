@@ -7,6 +7,7 @@ import {
   type EnvironmentId,
   type ModelSelection,
   ProviderInstanceId,
+  type ProviderInteractionMode,
   type ServerProvider,
   type ThreadId,
   RuntimeMode,
@@ -39,6 +40,7 @@ interface ComposerSelectionInput {
   readonly supportsProviderSwitchingViaHandoff: boolean;
   readonly multipleModelSelections: ReadonlyArray<ModelSelection> | null;
   readonly runtimeMode: RuntimeMode;
+  readonly interactionMode: ProviderInteractionMode;
   readonly isLocalDraftThread: boolean;
   readonly canOverrideServerThreadEnvMode: boolean;
   readonly setPendingServerThreadEnvModeEntry: Dispatch<
@@ -68,6 +70,7 @@ export function useComposerSelection(input: ComposerSelectionInput) {
     supportsProviderSwitchingViaHandoff,
     multipleModelSelections,
     runtimeMode,
+    interactionMode,
     isLocalDraftThread,
     canOverrideServerThreadEnvMode,
     setPendingServerThreadEnvModeEntry,
@@ -80,6 +83,9 @@ export function useComposerSelection(input: ComposerSelectionInput) {
   );
   const setComposerDraftModelSelection = useComposerDraftStore((store) => store.setModelSelection);
   const setComposerDraftRuntimeMode = useComposerDraftStore((store) => store.setRuntimeMode);
+  const setComposerDraftInteractionMode = useComposerDraftStore(
+    (store) => store.setInteractionMode,
+  );
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
 
   const handleRuntimeModeChange = (mode: RuntimeMode) => {
@@ -91,6 +97,20 @@ export function useComposerSelection(input: ComposerSelectionInput) {
     scheduleComposerFocus();
   };
   const handleRuntimeModeChangeStable = useStableCallback(handleRuntimeModeChange);
+
+  const handleInteractionModeChange = (mode: ProviderInteractionMode) => {
+    if (mode === interactionMode) return;
+    setComposerDraftInteractionMode(composerDraftTarget, mode);
+    if (isLocalDraftThread) {
+      setDraftThreadContext(composerDraftTarget, { interactionMode: mode });
+    }
+    scheduleComposerFocus();
+  };
+  const handleInteractionModeChangeStable = useStableCallback(handleInteractionModeChange);
+  const toggleOrchestrateMode = () => {
+    handleInteractionModeChange(interactionMode === "orchestrate" ? "default" : "orchestrate");
+  };
+  const toggleOrchestrateModeStable = useStableCallback(toggleOrchestrateMode);
 
   const openProviderSetup = (instanceId: ProviderInstanceId) => {
     void navigate({
@@ -233,6 +253,8 @@ export function useComposerSelection(input: ComposerSelectionInput) {
   return {
     getModelDisabledReason,
     handleRuntimeModeChangeStable,
+    handleInteractionModeChangeStable,
+    toggleOrchestrateModeStable,
     onEnvModeChangeStable,
     onProviderModelSelectStable,
     onStartFromOriginChange,

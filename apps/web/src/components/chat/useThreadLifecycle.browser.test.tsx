@@ -116,6 +116,7 @@ function RestoreBranchHarness(props: {
     activeProjectCwd: "/repo",
     serverConfig: null,
     runtimeMode: "full-access" as never,
+    interactionMode: "default",
     isWorking: false,
     pendingBackgroundTasks: [{ taskId: "background-command", kind: "command" }] as never,
     turnItems: [],

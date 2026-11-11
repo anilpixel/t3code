@@ -621,7 +621,7 @@ function serializeCursorRecordingError(cause: unknown): unknown {
 
 function recordingRuntimePolicy(input: {
   readonly cwd: string;
-  readonly interactionMode: "default" | "plan";
+  readonly interactionMode: ProviderAdapter.ProviderAdapterV2RuntimePolicy["interactionMode"];
   readonly override?: Pick<RuntimePolicyV2Override, "approvalPolicy" | "sandboxPolicy">;
 }): ProviderAdapter.ProviderAdapterV2RuntimePolicy {
   return {
@@ -655,7 +655,7 @@ interface CursorReplayRecordingInput {
   readonly modelSelection: ModelSelection;
   readonly cwd: string;
   readonly transcriptCwd?: string;
-  readonly interactionMode?: "default" | "plan";
+  readonly interactionMode?: ProviderAdapter.ProviderAdapterV2RuntimePolicy["interactionMode"];
   readonly runtimePolicyOverride?: Pick<
     RuntimePolicyV2Override,
     "approvalPolicy" | "sandboxPolicy"

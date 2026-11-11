@@ -8117,6 +8117,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           parentThread: parentProjection.thread,
           childThreadId,
           parentNodeId: taskNodeId,
+          ...(command.targetProjectId === undefined
+            ? {}
+            : { targetProjectId: command.targetProjectId }),
           activeProviderThreadId: null,
           providerInstanceId: command.modelSelection.instanceId,
           modelSelection: command.modelSelection,
@@ -8140,6 +8143,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         providerInstanceId: command.modelSelection.instanceId,
         providerThreadId: null,
         childThreadId,
+        ...(childThread.projectId === parentProjection.thread.projectId
+          ? {}
+          : { childProjectId: childThread.projectId }),
         nativeTaskRef: null,
         prompt: command.task,
         title: command.title ?? null,

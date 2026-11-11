@@ -46,6 +46,7 @@ import {
   latestNativeContextUsage,
 } from "@t3tools/provider-core/server/handoffBudget";
 import { deliverContextHandoffs, withInlineContext } from "./ContextHandoffDelivery.ts";
+import { buildOrchestrateTurnInstructions } from "@t3tools/provider-core/server/orchestrationInstructions";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -870,6 +871,18 @@ export const layer: Layer.Layer<
         restartCancelledWork.length === 0
           ? ""
           : restartCancelledBackgroundWorkNote(restartCancelledWork);
+      const orchestrateNote =
+        resolvedRuntimePolicy.interactionMode === "orchestrate" &&
+        !isCompactionCommandMessage(message) &&
+        !goalCommand
+          ? buildOrchestrateTurnInstructions({
+              currentProjectId: projection.thread.projectId,
+              projects: yield* projects.listShells().pipe(Effect.orElseSucceed(() => [])),
+            })
+          : "";
+      const inlineTurnNotes = [restartNote, orchestrateNote]
+        .filter((part) => part !== "")
+        .join("\n\n");
       const tokenCap = yield* handoffTokenCapConfig.pipe(
         Effect.orElseSucceed(() => DEFAULT_HANDOFF_TOKEN_CAP),
       );
@@ -1015,7 +1028,7 @@ export const layer: Layer.Layer<
             return handoffBudget({
               tokenCap,
               modelContextWindow,
-              userText: restartNote === "" ? userText : `${restartNote}\n\n${userText}`,
+              userText: inlineTurnNotes === "" ? userText : `${inlineTurnNotes}\n\n${userText}`,
               attachments: message.attachments,
               providerThread: budgetProviderThread,
               nativeContextEstimate:
@@ -1600,7 +1613,12 @@ export const layer: Layer.Layer<
             sideChatHandoff === undefined || compact || goalCommand
               ? ""
               : sideChatHandoff.summaryText;
-          const context = [delivery.context, sideChatContext, restartNote]
+          const context = [
+            delivery.context,
+            sideChatContext,
+            restartNote,
+            ...(compact || goalCommand ? [] : [orchestrateNote]),
+          ]
             .filter((part) => part !== "")
             .join("\n\n");
           const { restartContinuationOfRunId: _resumedRunId, ...promptedInput } = turnInput;
@@ -1667,7 +1685,7 @@ export const layer: Layer.Layer<
         effectiveHandoffs.length === 0 &&
         retryHandoff.length === 0 &&
         sideChatHandoff === undefined &&
-        restartNote === "" &&
+        inlineTurnNotes === "" &&
         !noteContinuation
           ? session
           : makeDeliverySession(session, startWithHandoffs);

@@ -8,6 +8,7 @@ import type {
   EnvironmentId,
   ProjectId,
   ProviderDriverKind,
+  ProviderInteractionMode,
   PullRequestListInput,
   ServerProvider,
   ThreadId,
@@ -63,6 +64,7 @@ export function useComposerMenuItems({
   pullRequestProjectId,
   pullRequestRepository,
   threadPullRequests,
+  interactionMode,
   sideChatAvailable,
   sideChatDisabledReason,
   freshSessionAvailable,
@@ -82,6 +84,7 @@ export function useComposerMenuItems({
   readonly pullRequestProjectId: ProjectId | null;
   readonly pullRequestRepository: string | null;
   readonly threadPullRequests: ReadonlyArray<ThreadPullRequestLink> | undefined;
+  readonly interactionMode: ProviderInteractionMode;
   readonly sideChatAvailable: boolean;
   readonly sideChatDisabledReason: string | null;
   readonly freshSessionAvailable: boolean;
@@ -224,6 +227,25 @@ export function useComposerMenuItems({
           label: "/model",
           description: "Switch response model for this thread",
         },
+        ...(interactionMode === "orchestrate"
+          ? ([
+              {
+                id: "slash:default",
+                type: "slash-command",
+                command: "default",
+                label: "/default",
+                description: "Return to normal build mode for this thread",
+              },
+            ] as const)
+          : ([
+              {
+                id: "slash:orchestrate",
+                type: "slash-command",
+                command: "orchestrate",
+                label: "/orchestrate",
+                description: "Coordinate tasks across projects with subagents",
+              },
+            ] as const)),
         ...(sideChatAvailable
           ? ([
               {

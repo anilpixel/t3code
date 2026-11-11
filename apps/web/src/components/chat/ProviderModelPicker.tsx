@@ -274,6 +274,17 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
           : (props.getModelDisabledReason?.(instanceId, model) ?? null)
       }
       onInstanceModelChange={handleInstanceModelChange}
+      onConfirmModel={() => {
+        if (!docked) {
+          setIsMenuOpen(false);
+          return;
+        }
+        window.requestAnimationFrame(() => {
+          if (!focusEffort("levels")) {
+            setIsMenuOpen(false);
+          }
+        });
+      }}
       {...(docked
         ? {
             docked,
@@ -435,11 +446,23 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                   data-model-picker-effort
                   className="flex min-h-0 w-48 flex-col sm:shrink-0 border-l border-border/70 bg-muted/40 max-sm:h-64 max-sm:w-full max-sm:border-t max-sm:border-l-0"
                   onKeyDown={(event) => {
-                    if (event.key !== "ArrowLeft" || event.altKey || event.ctrlKey || event.metaKey)
+                    if (event.altKey || event.ctrlKey || event.metaKey) return;
+                    if (event.key === "ArrowLeft") {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      searchInputRef.current?.focus();
                       return;
-                    event.preventDefault();
-                    event.stopPropagation();
-                    searchInputRef.current?.focus();
+                    }
+                    if (
+                      event.key === "Enter" &&
+                      event.target instanceof HTMLElement &&
+                      event.target.hasAttribute("data-effort-level")
+                    ) {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      event.target.click();
+                      setIsMenuOpen(false);
+                    }
                   }}
                 >
                   {props.effortColumn}

@@ -23,7 +23,7 @@ export function runtimeModeRank(mode: RuntimeMode): number {
   }
 }
 
-/** How much an interaction mode allows: plan, then default. */
+/** How much an interaction mode allows: plan is read-only; default and orchestrate allow execution. */
 export function interactionModeRank(mode: ProviderInteractionMode): number {
   return mode === "plan" ? 0 : 1;
 }
@@ -71,12 +71,13 @@ export function resolveRuntimeMode(
   );
 }
 
-/** The same, for interaction modes. */
+/** Delegated worker subagents inherit normal build mode from an orchestrator parent. */
 export function resolveInteractionMode(
   parentMode: ProviderInteractionMode,
   requested: OrchestratorMcpInteractionMode | undefined,
 ): Effect.Effect<ProviderInteractionMode, OrchestratorMcpFailure> {
-  const resolved = requested === undefined || requested === "inherit" ? parentMode : requested;
+  const inherited = requested === undefined || requested === "inherit";
+  const resolved = inherited ? (parentMode === "orchestrate" ? "default" : parentMode) : requested;
   return interactionModeRank(resolved) > interactionModeRank(parentMode)
     ? Effect.fail(
         new OrchestratorMcpFailure({

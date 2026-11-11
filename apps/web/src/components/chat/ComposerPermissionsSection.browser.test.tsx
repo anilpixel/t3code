@@ -12,7 +12,11 @@ import {
   markOpenToPermissions,
   useComposerMenuProps,
 } from "./composerEventScope";
-import { ComposerFooterModeControls, ComposerPermissionsSection } from "./ComposerFooterControls";
+import {
+  ComposerFooterModeControls,
+  ComposerOrchestrateSection,
+  ComposerPermissionsSection,
+} from "./ComposerFooterControls";
 import { runtimeModeConfig, runtimeModeOptions } from "./runtimeModeConfig";
 
 const options = runtimeModeOptions.map((mode) => ({ mode, ...runtimeModeConfig[mode] }));
@@ -170,4 +174,56 @@ it("opens permissions directly from the context strip and applies a supported mo
     .toHaveAttribute("aria-checked", "true");
   await userEvent.keyboard("{Escape}");
   await expect.element(trigger).toHaveFocus();
+});
+
+function OrchestrateControls() {
+  const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>("full-access");
+  const [interactionMode, setInteractionMode] = useState<"default" | "orchestrate">("default");
+  const composerMenuProps = useComposerMenuProps();
+  return (
+    <div data-slot="composer-shell">
+      <ComposerFooterModeControls
+        runtimeMode={runtimeMode}
+        runtimeModeOptions={options}
+        interactionMode={interactionMode}
+        showOrchestrateToggle
+        onRuntimeModeChange={setRuntimeMode}
+        onToggleOrchestrateMode={() =>
+          setInteractionMode((current) => (current === "orchestrate" ? "default" : "orchestrate"))
+        }
+      />
+      <Menu>
+        <MenuTrigger>Overflow</MenuTrigger>
+        <MenuPopup {...composerMenuProps}>
+          <ComposerOrchestrateSection
+            interactionMode={interactionMode}
+            onInteractionModeChange={(next) =>
+              setInteractionMode(next === "orchestrate" ? "orchestrate" : "default")
+            }
+          />
+        </MenuPopup>
+      </Menu>
+      <p role="status">{interactionMode}</p>
+    </div>
+  );
+}
+
+it("toggles Orchestrate mode on and back to default from both the footer chip and overflow menu", async () => {
+  await using screen = await render(<OrchestrateControls />, { router: false }); // no routes involved
+  const chip = screen.getByTestId("composer-orchestrate-toggle");
+  await expect.element(chip).toHaveAttribute("aria-pressed", "false");
+  await expect.element(screen.getByRole("status")).toHaveTextContent("default");
+
+  await userEvent.click(chip);
+  await expect.element(chip).toHaveAttribute("aria-pressed", "true");
+  await expect.element(screen.getByRole("status")).toHaveTextContent("orchestrate");
+
+  await userEvent.click(screen.getByRole("button", { name: "Overflow" }));
+  await expect
+    .element(page.getByRole("menuitemradio", { name: "Orchestrate" }))
+    .toHaveAttribute("aria-checked", "true");
+  await userEvent.click(page.getByRole("menuitemradio", { name: "Build" }));
+
+  await expect.element(chip).toHaveAttribute("aria-pressed", "false");
+  await expect.element(screen.getByRole("status")).toHaveTextContent("default");
 });

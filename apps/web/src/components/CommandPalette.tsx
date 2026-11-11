@@ -68,6 +68,7 @@ import {
   LinkIcon,
   MessageSquareIcon,
   PaletteIcon,
+  NetworkIcon,
   RotateCcwIcon,
   SettingsIcon,
   MonitorIcon,
@@ -257,6 +258,7 @@ import { stackedThreadToast, toastManager } from "./ui/toast";
 import { suggestAppAccessForRemote } from "./sourceControlAppAccessToast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { ComposerHandleContext, useComposerHandleContext } from "../composerHandleContext";
+import { useComposerDraftStore } from "../composerDraftStore";
 import type { ChatComposerHandle } from "./chat/ChatComposer";
 import { pickableProjectGroups } from "@t3tools/client-runtime/state/project-grouping";
 import { buildSidebarProjectPickerEntries } from "../sidebarProjectGrouping";
@@ -468,6 +470,16 @@ function OpenCommandPaletteDialog(props: {
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
   const paletteRouteTarget = useThreadRouteTarget();
+  const paletteComposerTarget = paletteRouteTarget
+    ? paletteRouteTarget.kind === "server"
+      ? paletteRouteTarget.threadRef
+      : paletteRouteTarget.draftId
+    : null;
+  const composerDraftInteractionMode = useComposerDraftStore((store) =>
+    paletteComposerTarget === null
+      ? null
+      : (store.getComposerDraft(paletteComposerTarget)?.interactionMode ?? null),
+  );
   const projects = useProjects();
   const referenceThreadRef =
     pathname === "/pull-requests"
@@ -1338,11 +1350,45 @@ function OpenCommandPaletteDialog(props: {
     });
   }
 
-  const promptLinkTarget = paletteRouteTarget
-    ? paletteRouteTarget.kind === "server"
-      ? paletteRouteTarget.threadRef
-      : paletteRouteTarget.draftId
-    : null;
+  if (paletteComposerTarget !== null && (activeThread !== null || activeDraftThread !== null)) {
+    const activeInteractionMode =
+      composerDraftInteractionMode ??
+      activeThread?.interactionMode ??
+      activeDraftThread?.interactionMode ??
+      "default";
+    const isOrchestrateMode = activeInteractionMode === "orchestrate";
+    const nextMode = isOrchestrateMode ? "default" : "orchestrate";
+    actionItems.push({
+      kind: "action",
+      value: "action:toggle-orchestrate-mode",
+      title: isOrchestrateMode ? "Disable orchestrate mode" : "Enable orchestrate mode",
+      description: isOrchestrateMode
+        ? "Return this thread to normal build mode"
+        : "Coordinate tasks across projects with subagents",
+      searchTerms: [
+        "orchestrate",
+        "coordinator",
+        "master agent",
+        "multi project",
+        "subagents",
+        "mode",
+        "build",
+        "default",
+      ],
+      icon: <NetworkIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        const draftStore = useComposerDraftStore.getState();
+        draftStore.setInteractionMode(paletteComposerTarget, nextMode);
+        if (paletteRouteTarget?.kind === "draft") {
+          draftStore.setDraftThreadContext(paletteRouteTarget.draftId, {
+            interactionMode: nextMode,
+          });
+        }
+      },
+    });
+  }
+
+  const promptLinkTarget = paletteComposerTarget;
   const promptLinkProjectRef = activeThread ?? activeDraftThread;
   const promptLinkInput =
     promptLinkTarget === null
@@ -2915,6 +2961,15 @@ function OpenCommandPaletteDialog(props: {
       ) : isBrowsePending && browseResult === null ? (
         <div role="status" className="px-4 py-3 text-sm text-muted-foreground">
           Loading folders...
+        </div>
+      ) : willCreateProjectPath && !isCloneDestinationStep && visibleBrowseEntries.length === 0 ? (
+        <div
+          role="status"
+          className="border-b border-border/60 px-4 py-2.5 text-xs text-muted-foreground"
+        >
+          Folder does not exist yet. Press Enter to create{" "}
+          <span className="font-mono text-foreground">{resolvedAddProjectPath}</span> and add it as
+          a project.
         </div>
       ) : null}
       <CommandPaletteVirtualizedResults
