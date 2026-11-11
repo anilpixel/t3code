@@ -2871,7 +2871,17 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
           role: "Viewer",
         },
       ],
-      ...(signed ? { sign: path.join(repoRoot, "scripts/sign-macos.ts") } : {}),
+      sign: path.join(repoRoot, "scripts/sign-macos.ts"),
+      ...(signed
+        ? {}
+        : {
+            // Repackaging rewrites Info.plist, renames the Electron executable and helpers,
+            // and adds server-compile-cache in afterPack, which invalidates Electron's stock
+            // signature. Re-sign ad hoc so macOS LaunchServices/AMFI accepts the bundle.
+            identity: "-",
+            hardenedRuntime: false,
+            timestamp: "none",
+          }),
       ...(macPasskeySigning
         ? {
             entitlements: macPasskeySigning.entitlementsPath,
@@ -3993,6 +4003,10 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
   }
   if (!options.signed) {
     buildEnv.CSC_IDENTITY_AUTO_DISCOVERY = "false";
+    if (options.platform === "mac") {
+      // Ad-hoc signing uses no secrets; keep it enabled even when GITHUB_EVENT_NAME=pull_request.
+      buildEnv.CSC_FOR_PULL_REQUEST = "true";
+    }
     delete buildEnv.CSC_LINK;
     delete buildEnv.CSC_KEY_PASSWORD;
     delete buildEnv.APPLE_API_KEY;

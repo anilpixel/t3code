@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version (for example 0.1.8)"
+        description: "Release version (for example 0.1.9)"
         required: false
-        default: "0.1.8"
+        default: "0.1.9"
         type: string
       prerelease:
         description: "Mark release as prerelease"
@@ -64,7 +64,7 @@ jobs:
             tag="${GITHUB_REF_NAME}"
             version="${tag#v}"
           else
-            raw_version="${INPUT_VERSION:-0.1.8}"
+            raw_version="${INPUT_VERSION:-0.1.9}"
             version="${raw_version#v}"
             tag="v${version}"
           fi
@@ -150,7 +150,7 @@ jobs:
       rust_target: aarch64-apple-darwin
       resource_key: darwin-arm64
       cli_archive: true
-      launch_check: false
+      launch_check: true
       save_pnpm_store: false
 
   desktop_mac_x64:

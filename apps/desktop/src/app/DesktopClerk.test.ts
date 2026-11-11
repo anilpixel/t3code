@@ -43,6 +43,7 @@ import * as ElectronShell from "../electron/ElectronShell.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopClerk from "./DesktopClerk.ts";
 import * as DesktopWebLinks from "./DesktopWebLinks.ts";
+import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import * as DesktopPreReadyFileSystem from "./DesktopPreReadyFileSystem.ts";
 
@@ -50,6 +51,10 @@ const ignoreWebLinks = DesktopWebLinks.DesktopWebLinks.of({
   receive: () => Effect.void,
   setRendererReady: () => Effect.void,
 });
+
+const ignoreDesktopWindow = {
+  activate: Effect.void,
+} as unknown as DesktopWindow.DesktopWindow["Service"];
 
 const layerDesktopClerk = (
   isDevelopment = true,
@@ -174,26 +179,35 @@ describe("DesktopClerk", () => {
     },
   );
 
-  it.effect.each(["before configure", "after configure"] as const)(
-    "reveals the running window when a second instance launches %s",
-    (entry) => {
+  it.effect.each([
+    { entry: "before configure" as const, hasOpenWindow: true },
+    { entry: "after configure" as const, hasOpenWindow: true },
+    { entry: "before configure" as const, hasOpenWindow: false },
+    { entry: "after configure" as const, hasOpenWindow: false },
+  ])(
+    "reveals or activates the window when a second instance launches ($entry, hasOpenWindow=$hasOpenWindow)",
+    ({ entry, hasOpenWindow }) => {
       storageMock.mockReturnValue(storageAdapter);
       createClerkBridgeMock.mockReturnValue({ cleanup: vi.fn(), isPrimaryInstance: true });
       const quit = vi.fn();
       const listeners = new Map<string, (...args: unknown[]) => void>();
-      const revealed = Promise.withResolvers<unknown>();
+      const outcome = Promise.withResolvers<unknown>();
       const window = { id: 1 };
       const electronApp = {
         quit: Effect.sync(quit),
+        whenReady: Effect.void,
         on: (eventName: string, listener: (...args: unknown[]) => void) =>
           Effect.sync(() => {
             listeners.set(eventName, listener);
           }),
       } as unknown as ElectronApp.ElectronApp["Service"];
       const electronWindow = {
-        currentMainOrFirst: Effect.succeedSome(window),
-        reveal: (value: unknown) => Effect.sync(() => revealed.resolve(value)),
+        currentMainOrFirst: hasOpenWindow ? Effect.succeedSome(window) : Effect.succeedNone,
+        reveal: (value: unknown) => Effect.sync(() => outcome.resolve(value)),
       } as unknown as ElectronWindow.ElectronWindow["Service"];
+      const desktopWindow = {
+        activate: Effect.sync(() => outcome.resolve("activated")),
+      } as unknown as DesktopWindow.DesktopWindow["Service"];
 
       return Effect.gen(function* () {
         const clerk = yield* DesktopClerk.DesktopClerk;
@@ -202,12 +216,16 @@ describe("DesktopClerk", () => {
 
         assert.equal(quit.mock.calls.length, 0);
         if (entry === "after configure") listeners.get("second-instance")!({}, ["t3"]);
-        assert.strictEqual(yield* Effect.promise(() => revealed.promise), window);
+        assert.strictEqual(
+          yield* Effect.promise(() => outcome.promise),
+          hasOpenWindow ? window : "activated",
+        );
       }).pipe(
         Effect.scoped,
         Effect.provide(layerDesktopClerk(true, [], "darwin", undefined, undefined, listeners)),
         Effect.provideService(ElectronApp.ElectronApp, electronApp),
         Effect.provideService(ElectronWindow.ElectronWindow, electronWindow),
+        Effect.provideService(DesktopWindow.DesktopWindow, desktopWindow),
         Effect.provideService(DesktopWebLinks.DesktopWebLinks, ignoreWebLinks),
       );
     },
@@ -250,6 +268,7 @@ describe("DesktopClerk", () => {
         ElectronWindow.ElectronWindow,
         {} as ElectronWindow.ElectronWindow["Service"],
       ),
+      Effect.provideService(DesktopWindow.DesktopWindow, ignoreDesktopWindow),
       Effect.provideService(
         DesktopWebLinks.DesktopWebLinks,
         DesktopWebLinks.DesktopWebLinks.of({
@@ -336,6 +355,7 @@ it.effect(
       Effect.provide(layerDesktopClerk(true, [], "darwin", undefined, undefined, listeners)),
       Effect.provideService(ElectronApp.ElectronApp, electronApp),
       Effect.provideService(ElectronWindow.ElectronWindow, electronWindow),
+      Effect.provideService(DesktopWindow.DesktopWindow, ignoreDesktopWindow),
       Effect.provideService(DesktopWebLinks.DesktopWebLinks, ignoreWebLinks),
     );
   },
@@ -422,6 +442,7 @@ it.effect.each(["startup", "open-url", "early-second-instance"] as const)(
           ElectronWindow.ElectronWindow,
           {} as ElectronWindow.ElectronWindow["Service"],
         ),
+        Effect.provideService(DesktopWindow.DesktopWindow, ignoreDesktopWindow),
         Effect.provideService(DesktopWebLinks.DesktopWebLinks, ignoreWebLinks),
       );
     }).pipe(Effect.scoped),
@@ -473,6 +494,7 @@ it.effect("hands web and app links to the renderer and leaves other links alone"
         ElectronWindow.ElectronWindow,
         {} as ElectronWindow.ElectronWindow["Service"],
       ),
+      Effect.provideService(DesktopWindow.DesktopWindow, ignoreDesktopWindow),
       Effect.provideService(
         DesktopWebLinks.DesktopWebLinks,
         DesktopWebLinks.DesktopWebLinks.of({
