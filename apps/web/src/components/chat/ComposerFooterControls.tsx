@@ -1,5 +1,11 @@
-import type { ModelSelection, ProviderInstanceId, RuntimeMode } from "@t3tools/contracts";
+import type {
+  ModelSelection,
+  ProviderInstanceId,
+  ProviderInteractionMode,
+  RuntimeMode,
+} from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
+import { HammerIcon, NetworkIcon } from "lucide-react";
 import { type ComponentProps, memo, useId, useRef, useState } from "react";
 
 import { Menu as MenuPrimitive } from "@base-ui/react/menu";
@@ -24,6 +30,8 @@ const supervisedRuntimeModeOption: RuntimeModeOption = {
 export const ComposerFooterModeControls = memo(function ComposerFooterModeControls(props: {
   runtimeMode: RuntimeMode;
   runtimeModeOptions: ReadonlyArray<RuntimeModeOption>;
+  interactionMode?: ProviderInteractionMode;
+  showOrchestrateToggle?: boolean;
   size?: "sm" | "xs";
   hidden?: boolean;
   /** How the permissions chip shows: hidden while the thread matches the user's default. */
@@ -31,9 +39,11 @@ export const ComposerFooterModeControls = memo(function ComposerFooterModeContro
   /** Draw the icon in the label color, not muted (the mode differs from the user's default). */
   emphasized?: boolean;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
+  onToggleOrchestrateMode?: () => void;
 }) {
   const size = props.size ?? "sm";
   const accessDisplay = props.accessDisplay ?? "label";
+  const isOrchestrate = props.interactionMode === "orchestrate";
   const composerFloatingLayerProps = useComposerMenuProps();
   const [open, setOpen] = useComposerMenuState(props.hidden);
   const permissionsChipRef = useRef<HTMLButtonElement>(null);
@@ -93,8 +103,123 @@ export const ComposerFooterModeControls = memo(function ComposerFooterModeContro
     </Menu>
   );
 
-  return accessDisplay === "hidden" ? null : permissionsChip;
+  const orchestrateTooltip = isOrchestrate
+    ? "Orchestrate mode (Shift+Tab): coordinates tasks across projects with subagents. Click to return to build mode."
+    : "Enable Orchestrate mode (Shift+Tab): coordinates tasks across projects with subagents.";
+  const orchestrateChip =
+    props.showOrchestrateToggle && props.onToggleOrchestrateMode ? (
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <ComposerControl
+              type="button"
+              size={size}
+              aria-pressed={isOrchestrate}
+              data-testid="composer-orchestrate-toggle"
+              onClick={props.onToggleOrchestrateMode}
+              aria-label={isOrchestrate ? "Disable orchestrate mode" : "Enable orchestrate mode"}
+            />
+          }
+        >
+          <ComposerControlIcon
+            icon={NetworkIcon}
+            size={size}
+            {...(isOrchestrate ? { className: "text-current" } : {})}
+          />
+          <span data-composer-control-label>Orchestrate</span>
+        </TooltipTrigger>
+        <TooltipPopup side="top">{orchestrateTooltip}</TooltipPopup>
+      </Tooltip>
+    ) : null;
+
+  if (accessDisplay === "hidden" && !orchestrateChip) {
+    return null;
+  }
+
+  return (
+    <>
+      {accessDisplay === "hidden" ? null : permissionsChip}
+      {orchestrateChip}
+    </>
+  );
 });
+
+const INTERACTION_MODE_OPTIONS = [
+  {
+    mode: "default" as const,
+    label: "Build",
+    description: "Work directly inside the current project.",
+    icon: HammerIcon,
+  },
+  {
+    mode: "orchestrate" as const,
+    label: "Orchestrate",
+    description: "Decompose cross-project goals and delegate to project subagents.",
+    icon: NetworkIcon,
+  },
+] as const;
+
+export function ComposerOrchestrateSection(props: {
+  interactionMode: ProviderInteractionMode;
+  onInteractionModeChange: (mode: ProviderInteractionMode) => void;
+}) {
+  const activeMode: "default" | "orchestrate" =
+    props.interactionMode === "orchestrate" ? "orchestrate" : "default";
+  const [previewMode, setPreviewMode] = useState<"default" | "orchestrate" | null>(null);
+  const shownMode = previewMode ?? activeMode;
+  const shown =
+    INTERACTION_MODE_OPTIONS.find((option) => option.mode === shownMode) ??
+    INTERACTION_MODE_OPTIONS[0];
+  return (
+    <div data-composer-orchestrate className="grid w-72 gap-1.5 px-2 py-1.5">
+      <div className="font-medium text-muted-foreground text-xs">Role</div>
+      <MenuPrimitive.RadioGroup
+        aria-label="Role"
+        value={activeMode}
+        onValueChange={(value: "default" | "orchestrate") => {
+          if (value !== activeMode) props.onInteractionModeChange(value);
+        }}
+        className="flex rounded-lg bg-input/40 p-0.5"
+        onKeyDown={(event) => {
+          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+          const items = Array.from(
+            event.currentTarget.querySelectorAll<HTMLElement>('[role="menuitemradio"]'),
+          );
+          const index = items.findIndex((item) => item === document.activeElement);
+          const next = items[index + (event.key === "ArrowRight" ? 1 : -1)];
+          if (index < 0 || !next) return;
+          event.preventDefault();
+          event.stopPropagation();
+          next.focus();
+        }}
+      >
+        {INTERACTION_MODE_OPTIONS.map((option) => {
+          const OptionIcon = option.icon;
+          return (
+            <MenuPrimitive.RadioItem
+              key={option.mode}
+              value={option.mode}
+              label={option.label}
+              aria-label={option.label}
+              closeOnClick
+              onPointerEnter={() => setPreviewMode(option.mode)}
+              onPointerLeave={() => setPreviewMode(null)}
+              onFocus={() => setPreviewMode(option.mode)}
+              onBlur={() => setPreviewMode(null)}
+              className="flex h-6 flex-1 cursor-pointer items-center justify-center gap-1.5 text-muted-foreground text-xs outline-none first:rounded-l-md last:rounded-r-md data-checked:bg-input/72 data-checked:text-foreground data-highlighted:text-foreground not-data-checked:data-highlighted:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+            >
+              <OptionIcon aria-hidden="true" className="size-3.5" />
+              {option.label}
+            </MenuPrimitive.RadioItem>
+          );
+        })}
+      </MenuPrimitive.RadioGroup>
+      <div className="grid gap-0.5" aria-hidden="true">
+        <span className="min-h-8 text-muted-foreground text-xs leading-4">{shown.description}</span>
+      </div>
+    </div>
+  );
+}
 
 /**
  * Permission modes as one horizontal toggle, with the shown mode named below.

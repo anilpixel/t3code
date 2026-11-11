@@ -55,8 +55,9 @@ import {
 import {
   type ComposerSubmissionIntent,
   collapseExpandedComposerCursor,
+  parseStandaloneComposerSlashCommand,
 } from "../../composer-logic";
-import { type ChatMessage, DEFAULT_INTERACTION_MODE } from "../../types";
+import { type ChatMessage } from "../../types";
 import { recordPromptSent } from "../GitHubStarPrompt";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { newMessageId, newThreadId } from "~/lib/utils";
@@ -174,6 +175,8 @@ interface ComposerSendInput {
   readonly isGitRepo: boolean;
   readonly phase: SessionPhase;
   readonly runtimeMode: RuntimeMode;
+  readonly interactionMode: ProviderInteractionMode;
+  readonly onInteractionModeChange: (mode: ProviderInteractionMode) => void;
   readonly sendEnvMode: DraftThreadEnvMode;
   readonly startFromOrigin: boolean;
   readonly localCheckoutBranchMismatch: {
@@ -271,6 +274,8 @@ export function useComposerSend(input: ComposerSendInput) {
     isGitRepo,
     phase,
     runtimeMode,
+    interactionMode,
+    onInteractionModeChange,
     sendEnvMode,
     startFromOrigin,
     localCheckoutBranchMismatch,
@@ -346,6 +351,7 @@ export function useComposerSend(input: ComposerSendInput) {
     composerRef,
     promptRef,
     runtimeMode,
+    interactionMode,
     startFromOrigin,
     resetLocalDispatch,
     setThreadError,
@@ -688,6 +694,16 @@ export function useComposerSend(input: ComposerSendInput) {
       clearComposerDraftContent(composerDraftTarget);
       composerRef.current?.resetCursorState();
       return;
+    }
+    if (composerHoldsOnlyText && multipleModelSelections === null) {
+      const modeCommand = parseStandaloneComposerSlashCommand(trimmed);
+      if (modeCommand === "orchestrate" || modeCommand === "default") {
+        onInteractionModeChange(modeCommand);
+        promptRef.current = "";
+        clearComposerDraftContent(composerDraftTarget);
+        composerRef.current?.resetCursorState();
+        return;
+      }
     }
     // Read once: an arm made while this send is in flight belongs to the next message.
     const freshArm = freshSessionAvailable ? readFreshSessionArm(routeThreadKey) : undefined;
@@ -1141,7 +1157,7 @@ export function useComposerSend(input: ComposerSendInput) {
           ? { branch: localCheckoutBranchMismatch.currentBranch }
           : {}),
         runtimeMode,
-        interactionMode: DEFAULT_INTERACTION_MODE,
+        interactionMode,
       });
       if (settingsResult._tag === "Failure") {
         failure = settingsResult;
@@ -1174,7 +1190,7 @@ export function useComposerSend(input: ComposerSendInput) {
           },
           modelSelection: ctxSelectedModelSelection,
           runtimeMode,
-          interactionMode: DEFAULT_INTERACTION_MODE,
+          interactionMode,
         },
       });
       if (compactResult._tag === "Failure") {
@@ -1195,7 +1211,7 @@ export function useComposerSend(input: ComposerSendInput) {
                       title,
                       modelSelection: threadCreateModelSelection,
                       runtimeMode,
-                      interactionMode: DEFAULT_INTERACTION_MODE,
+                      interactionMode,
                       branch: activeThreadBranch,
                       worktreePath: activeThread.worktreePath,
                       createdAt: activeThread.createdAt,
@@ -1237,7 +1253,7 @@ export function useComposerSend(input: ComposerSendInput) {
           modelSelection: ctxSelectedModelSelection,
           titleSeed: title,
           runtimeMode,
-          interactionMode: DEFAULT_INTERACTION_MODE,
+          interactionMode,
           dispatchMode: turnDispatchMode,
           ...(freshArm === undefined ? {} : { freshContext: true }),
           ...(bootstrap ? { bootstrap } : {}),

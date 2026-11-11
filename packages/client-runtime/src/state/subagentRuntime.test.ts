@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
@@ -121,6 +122,34 @@ describe("projectedSubagentsToRuntime workflow expansion", () => {
       }).modelLabel,
     ).toBe("Claude Opus 5.5");
     expect(resolveSubagentMetadata({ model: workflow!.model }).modelLabel).toBe("Not reported");
+    const parentThread = { projectId: ProjectId.make("project-a"), worktreePath: null };
+    const parentProject = { workspaceRoot: "/repos/project-a" };
+    const childProject = {
+      id: ProjectId.make("project-b"),
+      title: "Project B",
+      workspaceRoot: "/repos/project-b",
+    };
+    expect(
+      resolveSubagentMetadata({
+        model: null,
+        parentThread,
+        childThread: { branch: null, worktreePath: null },
+        parentProject,
+        childProject,
+      }).workspace,
+    ).toEqual([{ label: "Project", value: "Project B" }]);
+    expect(
+      resolveSubagentMetadata({
+        model: null,
+        parentThread,
+        childThread: { branch: "t3code/task", worktreePath: "/worktrees/project-b-task" },
+        parentProject,
+        childProject,
+      }).workspace,
+    ).toEqual([
+      { label: "Project", value: "Project B" },
+      { label: "Branch", value: "t3code/task" },
+    ]);
   });
 
   it.each(["completed", "cancelled", "failed"] as const)(

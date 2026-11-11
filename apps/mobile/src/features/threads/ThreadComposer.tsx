@@ -61,7 +61,9 @@ import {
   setComposerDraftText,
   composerContextImportsAtom,
   countComposerDraftAttachmentsAfterSelection,
+  updateComposerDraftSettings,
   useComposerDraft,
+  useComposerDraftSettings,
 } from "../../state/use-composer-drafts";
 import { appAtomRegistry } from "../../state/atom-registry";
 import type { ComposerDocumentAttachment } from "../../lib/composerContext";
@@ -451,6 +453,8 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
   const composerOwnerKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
   const composerDraftKey = props.draftKey ?? composerOwnerKey;
   const { text: draftMessage, attachments: draftAttachments } = useComposerDraft(composerDraftKey);
+  const draftSettings = useComposerDraftSettings(composerDraftKey);
+  const interactionMode = draftSettings.interactionMode ?? props.selectedThread.interactionMode;
   const queuedEdit = props.queuedEdit ?? null;
   const hasContent =
     draftMessage.trim().length > 0 ||
@@ -561,6 +565,9 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
       usageLimitsOffered && draftAttachments.length === 0 ? openUsageLimits : undefined,
     ...(props.onFreshSession === undefined ? {} : { onFreshSession: props.onFreshSession }),
     offersSideChat: props.offersSideChat === true,
+    interactionMode,
+    onInteractionModeChange: (mode) =>
+      updateComposerDraftSettings(composerDraftKey, { interactionMode: mode }),
   });
   const voiceInput = useVoiceInputController({
     ownerKey: composerDraftKey,
@@ -673,6 +680,16 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     if (usageLimitsOffered && isUsageLimitsCommand(draftMessage) && draftAttachments.length === 0) {
       if (openUsageLimits()) onChangeDraftMessage("");
       return;
+    }
+    if (draftAttachments.length === 0) {
+      const standaloneSlash = draftMessage.trim().toLowerCase();
+      if (standaloneSlash === "/orchestrate" || standaloneSlash === "/default") {
+        updateComposerDraftSettings(composerDraftKey, {
+          interactionMode: standaloneSlash === "/orchestrate" ? "orchestrate" : "default",
+        });
+        onChangeDraftMessage("");
+        return;
+      }
     }
     const threadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
     if (inFlightThreadIdsRef.current.has(threadKey)) return;
@@ -1035,7 +1052,11 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
                     }
                     insertPaste();
                   }}
-                  placeholder={props.placeholder}
+                  placeholder={
+                    props.placeholder === "Ask anything" && interactionMode === "orchestrate"
+                      ? "Describe a cross-project goal"
+                      : props.placeholder
+                  }
                   onFocus={handleFocus}
                   onBlur={handleBlur}
                   onSubmit={(alternate) =>

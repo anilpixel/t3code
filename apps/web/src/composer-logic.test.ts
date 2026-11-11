@@ -22,6 +22,7 @@ import {
   extendReplacementRangeForTrailingSpace,
   formatAssistantCitationForComposer,
   isPathSuggestionCurrent,
+  parseStandaloneComposerSlashCommand,
   replaceTextRange,
 } from "./composer-logic";
 import { slashCommandItemsForPromptPosition } from "./components/chat/composerSlashCommandSearch";
@@ -562,5 +563,18 @@ describe("side chat slash commands", () => {
     expect(slashCommandItemsForPromptPosition(items, false).map((item) => item.id)).toEqual([
       "slash:model",
     ]);
+  });
+});
+
+describe("parseStandaloneComposerSlashCommand", () => {
+  it.each([
+    ["/orchestrate", "orchestrate"],
+    ["  /ORCHESTRATE  ", "orchestrate"],
+    ["/default", "default"],
+    ["/plan", null],
+    ["/orchestrate api and web", null],
+    ["hello /orchestrate", null],
+  ] as const)("parses %j as %j", (text, expected) => {
+    expect(parseStandaloneComposerSlashCommand(text)).toBe(expected);
   });
 });

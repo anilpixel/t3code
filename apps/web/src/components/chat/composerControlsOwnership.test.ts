@@ -47,4 +47,17 @@ describe("resolveComposerControlsOwnership", () => {
     });
     expect(result.accessDisplay).toBe("icon");
   });
+
+  it("keeps the mode block visible for the orchestrate toggle while leaving composer.mode with the model picker", () => {
+    const result = resolveComposerControlsOwnership({
+      ...base,
+      showOrchestrateToggle: true,
+    });
+    expect(result).toMatchObject({
+      accessDisplay: "hidden",
+      showModeBlock: true,
+      overflowShowsPermissions: false,
+      pickerOwnsModeShortcut: true,
+    });
+  });
 });

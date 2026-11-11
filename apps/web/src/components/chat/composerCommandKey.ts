@@ -85,6 +85,7 @@ export function composerCommandKeyHandler(input: {
   /** Predicted next prompt that Tab fills into an empty composer; Escape dismisses it. */
   readonly promptSuggestion: string | null;
   readonly dismissPromptSuggestion: () => void;
+  readonly toggleOrchestrateMode: () => void;
 }) {
   const {
     keybindings,
@@ -122,6 +123,7 @@ export function composerCommandKeyHandler(input: {
     submitComposer,
     promptSuggestion,
     dismissPromptSuggestion,
+    toggleOrchestrateMode,
   } = input;
 
   // The composer persists across threads. A recall from thread A must not
@@ -210,7 +212,20 @@ export function composerCommandKeyHandler(input: {
       prompt: promptRef.current,
     });
     if (key === "Tab" && event.shiftKey && submissionIntent === null) {
-      return applyListEdit(event, listOutdentForTab);
+      if (applyListEdit(event, listOutdentForTab)) {
+        return true;
+      }
+      if (
+        !isLiteralPendingAnswer &&
+        !event.altKey &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.isComposing
+      ) {
+        toggleOrchestrateMode();
+        return true;
+      }
+      return false;
     }
     const { trigger } = resolveActiveComposerTrigger();
     const menuIsActive =

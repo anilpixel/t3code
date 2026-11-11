@@ -35,11 +35,10 @@ export function PairingRouteSurface({
   initialErrorMessage?: string;
   onAuthenticated: () => void;
 }) {
-  const [autoPairToken] = useState(peekPairingTokenFromUrl);
-  const [credential, setCredential] = useState(autoPairToken ?? "");
+  const [credential, setCredential] = useState(() => peekPairingTokenFromUrl() ?? "");
   const [errorMessage, setErrorMessage] = useState(initialErrorMessage ?? "");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const autoSubmitAttemptedRef = useRef(false);
+  const lastAutoSubmittedTokenRef = useRef<string | null>(null);
 
   const submitCredential = async (nextCredential: string) => {
     setIsSubmitting(true);
@@ -67,20 +66,26 @@ export function PairingRouteSurface({
     await submitCredential(credential);
   };
 
-  const autoSubmit = useEffectEvent((token: string) => {
-    void submitCredential(token);
-  });
-
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- strips the pairing token from the URL and submits it once when the route carries one
-  useEffect(() => {
-    if (!autoPairToken || autoSubmitAttemptedRef.current) {
+  const consumeUrlPairingToken = useEffectEvent(() => {
+    const token = peekPairingTokenFromUrl();
+    if (!token || lastAutoSubmittedTokenRef.current === token) {
       return;
     }
 
-    autoSubmitAttemptedRef.current = true;
+    lastAutoSubmittedTokenRef.current = token;
+    setCredential(token);
     stripPairingTokenFromUrl();
-    autoSubmit(autoPairToken);
-  }, [autoPairToken]);
+    void submitCredential(token);
+  });
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- consumes pairing tokens from initial URL hash and same-tab hashchange navigations
+  useEffect(() => {
+    consumeUrlPairingToken();
+    window.addEventListener("hashchange", consumeUrlPairingToken);
+    return () => {
+      window.removeEventListener("hashchange", consumeUrlPairingToken);
+    };
+  }, []);
 
   return (
     <StandalonePage>
@@ -286,5 +291,5 @@ function describeSupportedMethods(bootstrapMethods: ReadonlyArray<string>): stri
     return "This environment is desktop-managed. Open it from the desktop app or paste a bootstrap credential if one was issued explicitly.";
   }
 
-  return "This environment accepts one-time pairing tokens. Pairing links can open this page directly, or you can paste the token here.";
+  return "This environment accepts one-time pairing tokens. Pairing links can open this page directly, or you can paste the token here. Run t3 pair on the host to generate a new link.";
 }

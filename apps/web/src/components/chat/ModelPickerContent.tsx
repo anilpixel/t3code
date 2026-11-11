@@ -366,6 +366,8 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   docked?: boolean;
   /** Right at the end of the search text moves into the popup's effort column. */
   onFocusEffort?: () => void;
+  /** Keyboard Enter confirmed the highlighted model selection. */
+  onConfirmModel?: () => void;
   /** Closes the list column, inside the popup's fixed height. */
   listFooter?: ReactNode;
 }) {
@@ -997,8 +999,12 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                     return;
                   }
                   const model = parseModelPickerModelKey(highlightedModelKeyRef.current);
-                  if (model) {
-                    handleModelSelect(model.slug, model.instanceId, e.shiftKey);
+                  if (
+                    model &&
+                    handleModelSelect(model.slug, model.instanceId, e.shiftKey) !== null &&
+                    !e.shiftKey
+                  ) {
+                    props.onConfirmModel?.();
                   }
                   return;
                 }

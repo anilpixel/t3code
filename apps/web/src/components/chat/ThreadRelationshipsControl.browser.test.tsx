@@ -1,5 +1,5 @@
 import * as DateTime from "effect/DateTime";
-import { EnvironmentId, NodeId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, NodeId, ProjectId, ThreadId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
@@ -9,6 +9,7 @@ const state = vi.hoisted(() => ({
   projection: null as unknown,
   commandSucceeds: false,
   relatedShells: [] as unknown[],
+  projects: [] as unknown[],
   threadTitles: {} as Record<string, string>,
   archivedThreads: [] as unknown[],
 }));
@@ -34,7 +35,7 @@ vi.mock(import("../../state/entities"), () => ({
     state.projection === null
       ? []
       : [(state.projection as { thread: unknown }).thread, ...state.relatedShells]) as never,
-  useProjects: (() => []) as never,
+  useProjects: (() => state.projects) as never,
   useHiddenThreadKeys: (() => new Set()) as never,
   useAnyEnvironmentHiding: (() => false) as never,
 }));
@@ -65,6 +66,7 @@ const threadId = ThreadId.make("fork");
 function setup() {
   state.commandSucceeds = false;
   state.relatedShells = [];
+  state.projects = [];
   state.threadTitles = { source: "Source" };
   state.archivedThreads = [];
   state.projection = {
@@ -160,11 +162,41 @@ it.each([
   }
 });
 
-it("opens an idle child from Lineage when its shell has not been loaded", async () => {
+it("opens an idle child from Lineage when its shell has not been loaded and shows the target project on a cross-project child", async () => {
   setup();
   const projection = makeThreadProjectionFixture();
   const childId = ThreadId.make("omitted-child");
+  const crossProjectChildId = ThreadId.make("cross-project-child");
   const environmentId = EnvironmentId.make("local");
+  state.projects = [
+    {
+      id: projection.thread.projectId,
+      environmentId,
+      title: "Master Router",
+      workspaceRoot: "/repos/master-router",
+    },
+    {
+      id: "project-payment",
+      environmentId,
+      title: "payment-service",
+      workspaceRoot: "/repos/payment-service",
+    },
+  ];
+  state.relatedShells = [
+    {
+      ...projection.thread,
+      id: crossProjectChildId,
+      projectId: "project-payment",
+      title: "Audit payment webhook",
+      branch: null,
+      worktreePath: null,
+      lineage: {
+        parentThreadId: projection.thread.id,
+        relationshipToParent: "subagent",
+        rootThreadId: projection.thread.id,
+      },
+    },
+  ];
   state.projection = {
     ...projection,
     subagents: [
@@ -179,6 +211,7 @@ it("opens an idle child from Lineage when its shell has not been loaded", async 
         providerInstanceId: projection.thread.providerInstanceId,
         providerThreadId: null,
         childThreadId: childId,
+        childProjectId: ProjectId.make("project-payment"),
         nativeTaskRef: null,
         prompt: "Inspect the change",
         title: "Idle child",
@@ -187,6 +220,27 @@ it("opens an idle child from Lineage when its shell has not been loaded", async 
         result: null,
         startedAt: null,
         completedAt: projection.thread.updatedAt,
+        updatedAt: projection.thread.updatedAt,
+      },
+      {
+        id: NodeId.make("cross-project-agent"),
+        threadId: projection.thread.id,
+        runId: null,
+        parentNodeId: NodeId.make("parent"),
+        origin: "app_owned",
+        createdBy: "agent",
+        driver: "codex",
+        providerInstanceId: projection.thread.providerInstanceId,
+        providerThreadId: null,
+        childThreadId: crossProjectChildId,
+        nativeTaskRef: null,
+        prompt: "Audit webhook signature in payment-service",
+        title: "Audit payment webhook",
+        model: "gpt-5.4",
+        status: "running",
+        result: null,
+        startedAt: projection.thread.updatedAt,
+        completedAt: null,
         updatedAt: projection.thread.updatedAt,
       },
     ],
@@ -199,21 +253,62 @@ it("opens an idle child from Lineage when its shell has not been loaded", async 
       showSideChats
     />,
   );
+  const crossProjectRow = screen.getByRole("button", { name: /^Audit payment webhook/ });
+  await userEvent.hover(crossProjectRow);
+  await vi.waitFor(() => {
+    const popupText = document.querySelector('[data-slot="tooltip-popup"]')?.textContent ?? "";
+    expect(popupText).toContain("Project");
+    expect(popupText).toContain("payment-service");
+    expect(popupText).not.toContain("Workspace");
+  });
+  await crossProjectRow.click();
+  await vi.waitFor(() =>
+    expect(screen.router?.state.location.pathname).toBe("/local/cross-project-child"),
+  );
+
   await screen.getByRole("button", { name: /Previous agents/ }).click();
   const child = screen.getByRole("button", { name: /Idle child/ });
   await expect.element(child).toBeEnabled();
+  await userEvent.hover(child);
+  await vi.waitFor(() => {
+    const popupText = document.querySelector('[data-slot="tooltip-popup"]')?.textContent ?? "";
+    expect(popupText).toContain("Project");
+    expect(popupText).toContain("payment-service");
+  });
   await child.click();
   await vi.waitFor(() =>
     expect(screen.router?.state.location.pathname).toBe("/local/omitted-child"),
   );
 });
 
-it("shows a lineage thread's full title in its tooltip", async () => {
+it("shows a lineage thread's full title and cross-project target in its tooltip", async () => {
   setup();
   const longTitle = "Compare the lineage tooltip against a title that the row truncates";
+  state.projects = [
+    {
+      id: "project-child",
+      environmentId,
+      title: "payment-service",
+      workspaceRoot: "/repos/payment-service",
+    },
+    {
+      id: "project-parent",
+      environmentId,
+      title: "master-hub",
+      workspaceRoot: "/repos/master-hub",
+    },
+  ];
+  state.projection = {
+    ...(state.projection as Record<string, unknown>),
+    thread: {
+      ...(state.projection as { thread: Record<string, unknown> }).thread,
+      projectId: "project-child",
+    },
+  };
   const sourceThread = {
     ...(state.projection as { thread: Record<string, unknown> }).thread,
     id: "source",
+    projectId: "project-parent",
     title: longTitle,
     lineage: { parentThreadId: null, relationshipToParent: null },
   };
@@ -228,9 +323,11 @@ it("shows a lineage thread's full title in its tooltip", async () => {
   );
 
   await userEvent.hover(page.getByText(longTitle, { exact: true }));
-  await vi.waitFor(() =>
-    expect(document.querySelector('[data-slot="tooltip-popup"]')?.textContent).toContain(longTitle),
-  );
+  await vi.waitFor(() => {
+    const popupText = document.querySelector('[data-slot="tooltip-popup"]')?.textContent ?? "";
+    expect(popupText).toContain(longTitle);
+    expect(popupText).toContain("Open parent thread in master-hub");
+  });
 });
 
 it("shows a side chat's full title in its tooltip", async () => {

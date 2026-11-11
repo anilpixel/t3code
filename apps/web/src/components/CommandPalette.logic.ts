@@ -728,7 +728,7 @@ export function buildBrowseGroups(input: {
     });
   }
 
-  return [{ value: "directories", label: "Directories", items }];
+  return items.length === 0 ? [] : [{ value: "directories", label: "Directories", items }];
 }
 
 export function filterPinnedBrowseEntries(input: {

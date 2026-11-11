@@ -6,6 +6,7 @@
 export function resolveComposerControlsOwnership(input: {
   /** Permissions hide while the mode is the default, or while the new-thread strip names it. */
   readonly matchesDefault: boolean;
+  readonly showOrchestrateToggle?: boolean;
   readonly collapsed: boolean;
   /** How many trailing blocks the width measurement moved into the overflow menu. */
   readonly measuredHiddenBlockCount: number;
@@ -15,10 +16,10 @@ export function resolveComposerControlsOwnership(input: {
     : input.collapsed
       ? ("icon" as const)
       : ("label" as const);
-  const showModeBlock = accessDisplay !== "hidden";
+  const showModeBlock = accessDisplay !== "hidden" || Boolean(input.showOrchestrateToggle);
   const modeHidden = showModeBlock && input.measuredHiddenBlockCount > 0;
   const hiddenBlockIds = modeHidden ? (["mode"] as const) : ([] as const);
-  const overflowShowsPermissions = modeHidden;
+  const overflowShowsPermissions = modeHidden && accessDisplay !== "hidden";
   return {
     accessDisplay,
     showModeBlock,

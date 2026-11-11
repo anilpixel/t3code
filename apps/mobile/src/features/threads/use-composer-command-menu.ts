@@ -2,6 +2,7 @@ import * as Dialog from "../../components/ui/Dialog";
 import type {
   EnvironmentId,
   ProjectId,
+  ProviderInteractionMode,
   ServerProvider,
   ThreadId,
   ThreadPullRequestLink,
@@ -106,6 +107,8 @@ export function buildComposerSlashCommandItems(input: {
   /** T3's `/clear` replaces the provider's, which would clear a session T3 still treats as live. */
   readonly offersFreshSession?: boolean;
   readonly offersSideChat?: boolean;
+  readonly interactionMode?: ProviderInteractionMode;
+  readonly offersOrchestrateToggle?: boolean;
   readonly selectedProviderStatus: Pick<ServerProvider, "driver" | "slashCommands"> | null;
 }): ComposerCommandItem[] {
   const query = input.query.toLowerCase();
@@ -120,6 +123,26 @@ export function buildComposerSlashCommandItems(input: {
         },
       ]
     : [];
+  if (input.offersOrchestrateToggle) {
+    if (input.interactionMode !== "orchestrate" && "orchestrate".includes(query)) {
+      items.push({
+        id: "cmd:orchestrate",
+        type: "slash-command",
+        command: "orchestrate",
+        label: "/orchestrate",
+        description: "Coordinate delegated work across projects",
+      });
+    }
+    if (input.interactionMode === "orchestrate" && "default".includes(query)) {
+      items.push({
+        id: "cmd:default",
+        type: "slash-command",
+        command: "default",
+        label: "/default",
+        description: "Switch back to standard build mode",
+      });
+    }
+  }
 
   // Providers expand commands only at the start of a message. T3 commands
   // change local state and do not have this restriction, except `/clear`.
@@ -213,6 +236,8 @@ export function useComposerCommandMenu({
   onUsageLimits,
   onFreshSession,
   offersSideChat = false,
+  interactionMode,
+  onInteractionModeChange,
 }: {
   readonly draftMessage: string;
   readonly ownerKey: string | null;
@@ -236,6 +261,8 @@ export function useComposerCommandMenu({
   /** Arms a fresh session for the next message; absent where `/clear` is unavailable. */
   readonly onFreshSession?: () => void;
   readonly offersSideChat?: boolean;
+  readonly interactionMode?: ProviderInteractionMode;
+  readonly onInteractionModeChange?: (mode: ProviderInteractionMode) => void;
 }) {
   const [localSelection, setLocalSelection] = useState(() => ({
     ownerKey,
@@ -341,6 +368,8 @@ export function useComposerCommandMenu({
         offersUsageLimits,
         offersFreshSession: onFreshSession !== undefined,
         offersSideChat,
+        interactionMode,
+        offersOrchestrateToggle: onInteractionModeChange !== undefined,
         selectedProviderStatus: selectedProviderStatus
           ? {
               ...selectedProviderStatus,
@@ -578,6 +607,17 @@ export function useComposerCommandMenu({
       setSelection({ start: cleared.cursor, end: cleared.cursor });
       onChangeDraftMessage(cleared.text);
       onFreshSession();
+      return;
+    }
+    if (
+      item.type === "slash-command" &&
+      (item.command === "orchestrate" || item.command === "default") &&
+      onInteractionModeChange
+    ) {
+      const cleared = replaceTextRange(draftMessage, trigger.rangeStart, trigger.rangeEnd, "");
+      setSelection({ start: cleared.cursor, end: cleared.cursor });
+      onChangeDraftMessage(cleared.text);
+      onInteractionModeChange(item.command === "orchestrate" ? "orchestrate" : "default");
       return;
     }
     if (

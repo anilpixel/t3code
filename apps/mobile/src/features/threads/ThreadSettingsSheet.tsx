@@ -15,6 +15,7 @@ import type {
   ModelSelection,
   ProjectId,
   ProviderInstanceId,
+  ProviderInteractionMode,
   ProviderOptionDescriptor,
   ProviderOptionSelection,
   RuntimeMode,
@@ -271,6 +272,8 @@ type ThreadSettingsSessionProps = {
   readonly onUpdateOptionSelections: (selections: ReadonlyArray<ProviderOptionSelection>) => void;
   readonly runtimeMode: RuntimeMode;
   readonly onUpdateRuntimeMode: (mode: RuntimeMode) => void;
+  readonly interactionMode?: ProviderInteractionMode;
+  readonly onUpdateInteractionMode?: (mode: ProviderInteractionMode) => void;
 };
 
 /** The composer draft the sheet edits: the thread's own, or a queued message being edited. */
@@ -294,6 +297,8 @@ type ThreadSettingsSessionValue = {
   readonly runtimeMode: RuntimeMode;
   readonly runtimeModeChoices: ReadonlyArray<RuntimeModeChoice>;
   readonly onUpdateRuntimeMode: (mode: RuntimeMode) => void;
+  readonly interactionMode?: ProviderInteractionMode;
+  readonly onUpdateInteractionMode?: (mode: ProviderInteractionMode) => void;
   readonly displayedDescriptors: ReadonlyArray<ProviderOptionDescriptor>;
   readonly promptTraits: ReturnType<typeof getPromptControlledTraits>;
   readonly displayedModelSelection: ModelSelection | null;
@@ -603,6 +608,8 @@ function ThreadSettingsSessionProvider(
     runtimeMode: compatibleRuntimeMode,
     runtimeModeChoices,
     onUpdateRuntimeMode: props.onUpdateRuntimeMode,
+    interactionMode: props.interactionMode,
+    onUpdateInteractionMode: props.onUpdateInteractionMode,
     displayedDescriptors,
     promptTraits,
     displayedModelSelection: pendingModel?.selection ?? props.selectedModel,
@@ -878,6 +885,17 @@ function ThreadSettingsOptionsItem(props: {
             </Animated.View>
           );
         })}
+        {session.onUpdateInteractionMode ? (
+          <Animated.View layout={THREAD_SETTINGS_OPTIONS_LAYOUT_TRANSITION}>
+            <SwitchRow
+              label="Orchestrate mode"
+              value={session.interactionMode === "orchestrate"}
+              onValueChange={(enabled) =>
+                session.onUpdateInteractionMode?.(enabled ? "orchestrate" : "default")
+              }
+            />
+          </Animated.View>
+        ) : null}
         <Animated.View layout={THREAD_SETTINGS_OPTIONS_LAYOUT_TRANSITION}>
           <DisclosureRow
             isLast
@@ -1363,6 +1381,10 @@ export function ExistingThreadSettingsRouteScreen({
       }}
       runtimeMode={draftSettings.runtimeMode ?? selectedThread.runtimeMode}
       onUpdateRuntimeMode={(runtimeMode) => updateComposerDraftSettings(threadKey, { runtimeMode })}
+      interactionMode={draftSettings.interactionMode ?? selectedThread.interactionMode}
+      onUpdateInteractionMode={(interactionMode) =>
+        updateComposerDraftSettings(threadKey, { interactionMode })
+      }
       onClose={() => navigation.goBack()}
     />
   );
@@ -1392,6 +1414,8 @@ export function NewTaskThreadSettingsRouteScreen() {
       onUpdateOptionSelections={flow.setSelectedModelOptions}
       runtimeMode={flow.runtimeMode}
       onUpdateRuntimeMode={flow.setRuntimeMode}
+      interactionMode={flow.interactionMode}
+      onUpdateInteractionMode={flow.setInteractionMode}
       onClose={() => navigation.goBack()}
     />
   );

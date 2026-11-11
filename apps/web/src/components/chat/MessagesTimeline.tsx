@@ -297,6 +297,7 @@ interface MessagesTimelineProps {
   anchorMessageId: MessageId | null;
   onAnchorReady: (messageId: MessageId, anchorIndex: number) => void;
   onAnchorSizeChanged: (messageId: MessageId, size: number) => void;
+  contentInsetStartAdjustment?: number;
   contentInsetEndAdjustment: number;
   onIsAtEndChange: (isAtEnd: boolean) => void;
   /** Disable while reading history to prevent LegendList re-pinning near the bottom. */
@@ -396,6 +397,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   anchorMessageId,
   onAnchorReady,
   onAnchorSizeChanged,
+  contentInsetStartAdjustment = 0,
   contentInsetEndAdjustment,
   onIsAtEndChange,
   liveFollowEnabled,
@@ -1126,6 +1128,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
     );
   const listHeader = (
     <>
+      {contentInsetStartAdjustment > 0 ? (
+        <div aria-hidden style={{ height: contentInsetStartAdjustment }} />
+      ) : null}
       {parentThreadLink === null ? listHeaderLeadingContent : null}
       {historyControls ? <TimelineHistoryControl {...historyControls} /> : null}
       {parentThreadLink !== null ? listHeaderLeadingContent : null}

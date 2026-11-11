@@ -6,6 +6,7 @@ import type {
   OrchestrationV2Subagent,
   OrchestrationV2SubagentWorkflow,
   OrchestrationV2TurnItem,
+  ProjectId,
 } from "@t3tools/contracts";
 import { isOrchestrationV2WorkActive, isProviderNativeSubagentThread } from "@t3tools/contracts";
 
@@ -71,6 +72,7 @@ export interface RuntimeSubagent {
   readonly phases: ReadonlyArray<SubagentWorkflowPhase>;
   readonly runHandles: SubagentRunHandles | null;
   readonly childThreadId: string | null;
+  readonly childProjectId?: ProjectId | undefined;
   readonly recentActivity: ReadonlyArray<SubagentActivityEntry>;
   readonly firstSeenAt: string;
   readonly startedAt: string | null;
@@ -211,6 +213,7 @@ export function projectedSubagentsToRuntime(
     readonly status: OrchestrationV2Subagent["status"];
     readonly progress?: string | undefined;
     readonly childThreadId?: string | null | undefined;
+    readonly childProjectId?: ProjectId | undefined;
     readonly workflow?: OrchestrationV2SubagentWorkflow | undefined;
     readonly result: string | null;
     readonly startedAt: DateTime.Utc | null;
@@ -248,6 +251,7 @@ export function projectedSubagentsToRuntime(
       phases: workflow?.phases ?? [],
       runHandles,
       childThreadId: subagent.childThreadId ?? null,
+      ...(subagent.childProjectId === undefined ? {} : { childProjectId: subagent.childProjectId }),
       recentActivity: [],
       firstSeenAt,
       startedAt,

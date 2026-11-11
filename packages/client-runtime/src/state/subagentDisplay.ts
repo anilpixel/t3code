@@ -89,15 +89,20 @@ export function resolveSubagentMetadata(input: {
         )
         .trim() || reportedLabel
     : reportedLabel;
-  const parentWorkspace = input.parentThread?.worktreePath ?? input.parentProject?.workspaceRoot;
+  const crossProject = Boolean(
+    input.parentThread &&
+    input.childProject &&
+    input.childProject.id !== input.parentThread.projectId,
+  );
+  const baseWorkspace = crossProject
+    ? input.childProject?.workspaceRoot
+    : (input.parentThread?.worktreePath ?? input.parentProject?.workspaceRoot);
   const childWorkspace = input.childThread?.worktreePath ?? input.childProject?.workspaceRoot;
   const workspace = [
-    ...(input.parentThread &&
-    input.childProject &&
-    input.childProject.id !== input.parentThread.projectId
+    ...(crossProject && input.childProject
       ? [{ label: "Project", value: input.childProject.title }]
       : []),
-    ...(parentWorkspace && childWorkspace && parentWorkspace !== childWorkspace
+    ...(baseWorkspace && childWorkspace && baseWorkspace !== childWorkspace
       ? [
           {
             label: input.childThread?.branch

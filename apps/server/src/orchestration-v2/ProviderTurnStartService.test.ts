@@ -285,6 +285,12 @@ function makeLocalCommandHarness(input: {
   readonly interruptRunBeforeOpenFailure?: boolean;
   readonly writeFailure?: unknown;
   readonly failReadsAfterRunning?: boolean;
+  readonly interactionMode?: OrchestrationV2ThreadProjection["thread"]["interactionMode"];
+  readonly projectShells?: ReadonlyArray<{
+    readonly id: ProjectId;
+    readonly title: string;
+    readonly workspaceRoot: string;
+  }>;
   readonly previousTurn?: {
     readonly runStatus: "failed" | "completed";
     readonly turnStatus: "running" | "completed" | "interrupted";
@@ -371,6 +377,7 @@ function makeLocalCommandHarness(input: {
       id: threadId,
       activeProviderThreadId: providerThreadId,
       projectId: ProjectId.make("project-native-account-command"),
+      interactionMode: input.interactionMode ?? "default",
       branch: input.worktreePath === undefined ? null : "feature/restore",
       worktreePath: input.worktreePath ?? null,
       lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
@@ -826,19 +833,22 @@ function makeLocalCommandHarness(input: {
                     ),
                   ),
                 )
-              : input.failReadsAfterRunning === true || input.previousTurn !== undefined
+              : input.failReadsAfterRunning === true ||
+                  input.previousTurn !== undefined ||
+                  input.interactionMode !== undefined
                 ? Effect.succeed({
                     driver: providerThread.driver,
                     providerSession,
                     ensureThread: () => Effect.succeed(providerThread),
                     resumeThread: () => Effect.succeed(projection.providerThreads[0]),
+                    startTurn,
                   } as never)
                 : Effect.die("A local command must not open a native session."),
   );
   const startRootRun = vi.fn<
     (input: RunExecutionService.RunExecutionServiceV2StartRootRunInput) => Effect.Effect<void>
   >((runInput) =>
-    input.sideChat !== undefined
+    input.sideChat !== undefined || input.interactionMode !== undefined
       ? runInput.session.startTurn(runInput as never).pipe(Effect.orDie)
       : input.failReadsAfterRunning === true || input.previousTurn !== undefined
         ? Effect.suspend(() =>
@@ -894,6 +904,7 @@ function makeLocalCommandHarness(input: {
       Effect.succeed({
         cwd: thread.worktreePath ?? "/tmp/native-account-command",
         runtimeMode: thread.runtimeMode,
+        interactionMode: thread.interactionMode ?? "default",
       } as never),
   );
   const createWorktree = vi.fn<GitWorkflow.GitWorkflowService["Service"]["createWorktree"]>(() =>
@@ -957,6 +968,7 @@ function makeLocalCommandHarness(input: {
             Effect.succeedSome({
               workspaceRoot: input.workspaceRoot ?? "/tmp/native-account-project",
             } as never),
+          listShells: () => Effect.succeed((input.projectShells ?? []) as never),
         }),
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
           getThreadRecords,
@@ -1849,3 +1861,43 @@ for (const previousMessages of [[], ["/compact", " /COMPACT "]]) {
       }),
   );
 }
+
+effectIt.effect.each([
+  { interactionMode: "orchestrate" as const, expectedInjected: true },
+  { interactionMode: "default" as const, expectedInjected: false },
+])(
+  "injects orchestrate instructions and registered project map only in orchestrate mode ($interactionMode)",
+  ({ interactionMode, expectedInjected }) =>
+    Effect.gen(function* () {
+      const currentProjectId = ProjectId.make("project-native-account-command");
+      const siblingProjectId = ProjectId.make("project-web-client");
+      const harness = makeLocalCommandHarness({
+        text: "Add billing endpoint and frontend toggle",
+        interactionMode,
+        projectShells: [
+          { id: currentProjectId, title: "API Server", workspaceRoot: "/repos/api" },
+          { id: siblingProjectId, title: "Web Client", workspaceRoot: "/repos/web" },
+        ],
+      });
+
+      yield* harness.start;
+
+      expect(harness.startTurn).toHaveBeenCalledOnce();
+      const deliveredText = harness.startTurn.mock.calls[0]?.[0]?.message.text;
+      expect(harness.projection().messages.at(-1)?.text).toBe(
+        "Add billing endpoint and frontend toggle",
+      );
+      if (expectedInjected) {
+        expect(deliveredText).toContain("<t3_code_orchestrate_mode>");
+        expect(deliveredText).toContain(
+          `API Server (projectId: \`${currentProjectId}\`, workspaceRoot: \`/repos/api\`, current)`,
+        );
+        expect(deliveredText).toContain(
+          `Web Client (projectId: \`${siblingProjectId}\`, workspaceRoot: \`/repos/web\`)`,
+        );
+        expect(deliveredText).toContain("Add billing endpoint and frontend toggle");
+      } else {
+        expect(deliveredText).toBe("Add billing endpoint and frontend toggle");
+      }
+    }),
+);

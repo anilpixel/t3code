@@ -2,7 +2,7 @@ import { ThreadHoverCardPopup } from "../ThreadHoverCard";
 import { AgentElapsed } from "./AgentElapsed";
 import { projectedSubagentsToRuntime } from "@t3tools/client-runtime/state/subagentRuntime";
 import type { ReactNode } from "react";
-import { useThreadShell, useProject } from "../../state/entities";
+import { useProject, useQuietThreadShell, useThreadShell } from "../../state/entities";
 import { useEnvironment } from "../../state/environments";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import { useNavigate } from "@tanstack/react-router";
@@ -424,6 +424,19 @@ function SubagentTimelineLink(props: {
   const remoteEnvironment = useEnvironment(remote?.environmentId ?? null);
   const navigate = useNavigate();
   const threadId = props.threadId;
+  const parentProjectId = useQuietThreadShell(props.parentRef)?.source.projectId ?? null;
+  const loadedChildProjectId =
+    useQuietThreadShell(
+      remote === undefined && threadId !== null
+        ? scopeThreadRef(props.parentRef.environmentId, threadId)
+        : null,
+    )?.source.projectId ?? null;
+  const childProjectId = loadedChildProjectId ?? agent?.childProjectId ?? null;
+  const crossProject = useProject(
+    parentProjectId !== null && childProjectId !== null && childProjectId !== parentProjectId
+      ? scopeProjectRef(props.parentRef.environmentId, childProjectId)
+      : null,
+  );
   // A task in a linked environment opens there, if this client is connected to it.
   const open =
     threadId !== null
@@ -466,6 +479,8 @@ function SubagentTimelineLink(props: {
           </span>
           {remote !== undefined ? (
             <span className="shrink-0 text-xs text-muted-foreground">on {remote.label}</span>
+          ) : crossProject !== null ? (
+            <span className="shrink-0 text-xs text-muted-foreground">in {crossProject.title}</span>
           ) : null}
         </span>
         <span
@@ -532,6 +547,7 @@ function SubagentTimelineLink(props: {
       <ThreadHoverCardPopup>
         <SubagentTimelineTooltip
           {...props}
+          childProjectId={agent?.childProjectId}
           elapsed={agent ? <AgentElapsed agent={projectedSubagentsToRuntime([agent])[0]!} /> : null}
           model={agent?.model ?? null}
           modelSelection={agent?.modelSelection}
@@ -546,6 +562,7 @@ function SubagentTimelineLink(props: {
 
 function SubagentTimelineTooltip(
   props: Parameters<typeof SubagentTimelineLink>[0] & {
+    childProjectId: OrchestrationV2Subagent["childProjectId"];
     model: string | null;
     modelSelection: OrchestrationV2Subagent["modelSelection"];
     elapsed: ReactNode;
@@ -559,10 +576,13 @@ function SubagentTimelineTooltip(
   const child = useThreadShell(
     props.threadId ? scopeThreadRef(environmentId, props.threadId) : null,
   )?.source;
+  const resolvedChildProjectId = child?.projectId ?? props.childProjectId ?? null;
   const parentProject = useProject(
     parent ? scopeProjectRef(environmentId, parent.projectId) : null,
   );
-  const childProject = useProject(child ? scopeProjectRef(environmentId, child.projectId) : null);
+  const childProject = useProject(
+    resolvedChildProjectId ? scopeProjectRef(environmentId, resolvedChildProjectId) : null,
+  );
   return (
     <SubagentTooltipContent
       title={formatSubagentDisplayTitle(child?.title ?? props.title)}

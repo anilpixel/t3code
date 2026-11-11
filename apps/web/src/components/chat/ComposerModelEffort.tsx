@@ -4,10 +4,20 @@ import {
   isReasoningControl,
   selectableProviderOptionChoices,
 } from "@t3tools/client-runtime/model-traits";
-import type { ProviderOptionDescriptor, RuntimeMode } from "@t3tools/contracts";
+import type {
+  ProviderInteractionMode,
+  ProviderOptionDescriptor,
+  RuntimeMode,
+} from "@t3tools/contracts";
 import type { EffortDisplay } from "@t3tools/contracts/settings";
 import { getProviderOptionCurrentLabel } from "@t3tools/shared/model";
-import { CheckIcon, ChevronRightIcon, ChevronUpIcon, WorkflowIcon } from "lucide-react";
+import {
+  CheckIcon,
+  ChevronRightIcon,
+  ChevronUpIcon,
+  NetworkIcon,
+  WorkflowIcon,
+} from "lucide-react";
 import { type KeyboardEvent, type ReactNode, use, useRef, useState } from "react";
 
 import { cn } from "~/lib/utils";
@@ -662,11 +672,28 @@ export function ComposerPickerFooter(props: {
   runtimeMode: RuntimeMode;
   runtimeModeOptions: ReadonlyArray<RuntimeModeOption>;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
+  interactionMode?: ProviderInteractionMode;
+  onToggleOrchestrateMode?: () => void;
 }) {
+  const isOrchestrate = props.interactionMode === "orchestrate";
   return (
     <div className="flex flex-wrap items-center gap-2 border-t border-border/70 bg-muted/40 px-3 py-2">
       {props.traits ? <SpeedControl traits={props.traits} /> : null}
       {props.traits ? <UltracodeControl traits={props.traits} /> : null}
+      {props.onToggleOrchestrateMode ? (
+        <div className="flex rounded-lg bg-input/40 p-0.5">
+          <button
+            type="button"
+            aria-pressed={isOrchestrate}
+            data-checked={isOrchestrate || undefined}
+            className={FOOTER_SEGMENT}
+            onClick={props.onToggleOrchestrateMode}
+          >
+            <NetworkIcon aria-hidden="true" className="size-3" />
+            Orchestrate
+          </button>
+        </div>
+      ) : null}
       <PermissionsMenu
         runtimeMode={props.runtimeMode}
         options={props.runtimeModeOptions}

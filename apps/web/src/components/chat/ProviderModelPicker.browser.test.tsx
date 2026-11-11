@@ -166,6 +166,15 @@ it("keeps a docked picker open after a pick and hands focus to that model's effo
   await page.getByRole("option", { name: /Plain model/ }).click();
   await page.getByRole("option", { name: /Second model/ }).click();
   await expect.element(page.getByRole("radio", { name: "Medium" })).toHaveFocus();
-  await userEvent.keyboard("{Escape}");
+  await userEvent.keyboard("{Enter}");
   await expect.element(search).not.toBeInTheDocument();
+
+  await screen.getByRole("button", { name: "Choose model" }).click();
+  const reopenedSearch = page.getByPlaceholder("Search models...");
+  await expect.element(reopenedSearch).toHaveFocus();
+  await userEvent.keyboard("Plain{Enter}");
+  await expect.element(reopenedSearch).not.toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("button", { name: "Choose model" }))
+    .toHaveTextContent("Plain model");
 });

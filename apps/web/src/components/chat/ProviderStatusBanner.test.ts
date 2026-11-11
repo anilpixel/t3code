@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
 import {
+  getProviderBannerSetupActionLabel,
   getProviderStatusBannerKey,
   getProviderStatusMessage,
   shouldShowProviderStatusBanner,
@@ -29,6 +30,22 @@ const provider: ServerProvider = {
 describe("compatibility banners", () => {
   it("shows and dismisses a warning on a healthy provider, then clears it after policy relaxation", () => {
     expect(shouldShowProviderStatusBanner(provider, null)).toBe(true);
+    expect(getProviderBannerSetupActionLabel(provider)).toBeNull();
+    expect(
+      getProviderBannerSetupActionLabel({
+        ...provider,
+        status: "error",
+        installed: false,
+        message: "Could not start Codex CLI ('codex').",
+      }),
+    ).toBe("Open provider settings");
+    expect(
+      getProviderBannerSetupActionLabel({
+        ...provider,
+        status: "error",
+        setup: { canAuthenticate: true, canInstall: false },
+      }),
+    ).toBe("Open provider setup");
     expect(shouldShowProviderStatusBanner(provider, getProviderStatusBannerKey(provider))).toBe(
       false,
     );

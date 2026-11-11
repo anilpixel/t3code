@@ -4,6 +4,7 @@ import type { Thread } from "../types";
 import { makeThreadFixture } from "../test-fixtures";
 import {
   newThreadNoProjectIndex,
+  buildBrowseGroups,
   buildNestedSearchItems,
   resolveCommandPaletteProject,
   buildThreadActionItems,
@@ -795,6 +796,17 @@ describe("filterPinnedBrowseEntries", () => {
       visibleEntries: windowsEntries,
       exactEntry: windowsEntries[0],
     });
+    expect(
+      buildBrowseGroups({
+        browseEntries: [],
+        browseQuery: "/missing",
+        canBrowseUp: false,
+        upIcon: null,
+        directoryIcon: null,
+        browseUp: async () => undefined,
+        browseTo: async () => undefined,
+      }),
+    ).toEqual([]);
   });
 });
 
