@@ -2454,7 +2454,6 @@ const make = Effect.gen(function* () {
           "Delegated tasks require an active run owned by this MCP provider session.",
         );
       }
-      const providers = yield* loadProviders;
       const key = yield* requestKey(input.clientRequestId);
       const commandId = stableCommandId({
         scope,
@@ -2537,6 +2536,7 @@ const make = Effect.gen(function* () {
           : (input.target?.projectId ?? parent.thread.projectId);
       const isCrossProject = targetProjectId !== parent.thread.projectId;
       const targetProject = isCrossProject ? yield* requireProject(targetProjectId) : undefined;
+      const providers = yield* loadProviders;
       const inheritanceSource =
         continuedChild === undefined
           ? parent

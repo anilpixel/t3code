@@ -85,7 +85,7 @@ const OrchestratorCapabilitiesTool = Tool.make("orchestrator_capabilities", {
 
 const DelegateTaskTool = Tool.make("delegate_task", {
   description:
-    "Start one child agent with `task` (no parent history), or pass `continueTaskId` to run a follow-up in a settled local child's existing thread and checkout/PR. Separate checkout or PR per new child: `isolation:'worktree'`. Keep `taskId` for `task_status`, `task_cancel`, and `continueTaskId`. No secrets in `task`.",
+    "Start one child agent with only `task`. No parent history unless `continueTaskId` is set. Separate checkout or PR per child: `isolation:'worktree'`. Keep `taskId` for `task_status` and `task_cancel`. No secrets in `task`.",
   parameters: OrchestratorMcpDelegateTaskInput,
   success: OrchestratorMcpDelegateTaskResult,
   failure: OrchestratorMcpFailure,

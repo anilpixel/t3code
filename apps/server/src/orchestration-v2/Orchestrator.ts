@@ -8378,7 +8378,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: `Delegated child thread ${childThreadId} did not create a run.`,
         });
       }
-      if (childRun.delegatedTaskId !== taskNodeId) {
+      if (command.continueTaskId !== undefined && childRun.delegatedTaskId !== taskNodeId) {
         yield* emitEvent({
           type: "run.updated",
           threadId: childThreadId,
