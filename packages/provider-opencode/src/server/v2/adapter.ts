@@ -59,6 +59,10 @@ import * as OpenCodeRuntime from "../OpenCodeRuntime.ts";
 import { readableProviderErrorMessage } from "../providerErrorMessage.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
+import {
+  checkOrchestrateFilePaths,
+  checkOrchestrateShellCommand,
+} from "@t3tools/provider-core/server/orchestrateGuard";
 import { t3OrchestrationSystemPrompt } from "@t3tools/provider-core/server/orchestrationInstructions";
 import { SKILL_MENTION_PATTERN } from "@t3tools/shared/composerInlineTokens";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
@@ -191,7 +195,11 @@ interface TurnOwner {
   readonly runOrdinal: number;
   readonly rootNodeId: ProviderAdapter.ProviderAdapterV2TurnInput["rootNodeId"];
   readonly modelSelection: ModelSelection;
-  readonly runtimePolicy: Pick<ProviderAdapter.ProviderAdapterV2RuntimePolicy, "cwd">;
+  readonly message?: ProviderAdapter.ProviderAdapterV2TurnInput["message"] | undefined;
+  readonly runtimePolicy: Pick<
+    ProviderAdapter.ProviderAdapterV2RuntimePolicy,
+    "cwd" | "interactionMode" | "protectedWorkspaceRoots"
+  >;
 }
 
 interface ActiveTurn {
@@ -327,7 +335,7 @@ type TurnTerminal =
 type Rule = Permission.Rule;
 type RulesPolicy = Pick<
   ProviderAdapter.ProviderAdapterV2RuntimePolicy,
-  "runtimeMode" | "interactionMode"
+  "runtimeMode" | "interactionMode" | "protectedWorkspaceRoots"
 >;
 type NativeForm = EventOf<"form.created">["data"]["form"];
 
@@ -372,6 +380,19 @@ const mcpRules = (mcpServerName: string | null): ReadonlyArray<Rule> =>
         { action: `${mcpServerName}_*`, resource: "*", effect: "allow" },
       ];
 
+const orchestrateRules = (policy: RulesPolicy): ReadonlyArray<Rule> =>
+  policy.interactionMode !== "orchestrate"
+    ? []
+    : (policy.protectedWorkspaceRoots ?? []).flatMap((root) => {
+        const trimmed = root.replace(/\/+$/u, "");
+        return trimmed.length === 0
+          ? []
+          : [
+              { action: "edit", resource: trimmed, effect: "deny" as const },
+              { action: "edit", resource: `${trimmed}/*`, effect: "deny" as const },
+            ];
+      });
+
 const sessionRules = (
   policy: RulesPolicy,
   paths: ReadonlyArray<Rule>,
@@ -389,6 +410,7 @@ const sessionRules = (
   // Plan edits are re-allowed only for plan paths; free-tier sessions refuse denied shell/read.
   ...(policy.interactionMode === "plan" ? [rule("edit", "deny")] : []),
   ...paths,
+  ...orchestrateRules(policy),
   ...mcpRules(mcpServerName),
 ];
 
@@ -1900,7 +1922,63 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     });
 
     const onPermissionAsked = Effect.fnUntraced(function* (data: Permission.Request) {
-      const turn = threads.get(data.sessionID)?.active;
+      const ownerState = threads.get(data.sessionID);
+      const turn = ownerState?.active;
+      if (
+        ownerState?.subagent === undefined &&
+        turn !== undefined &&
+        turn.input.runtimePolicy.interactionMode === "orchestrate"
+      ) {
+        const protectedRoots = turn.input.runtimePolicy.protectedWorkspaceRoots ?? [];
+        const unattendedTurn =
+          turn.input.message !== undefined && turn.input.message.createdBy !== "user";
+        const denial =
+          data.action === "edit"
+            ? checkOrchestrateFilePaths(
+                data.resources.length > 0
+                  ? data.resources
+                  : turn.input.runtimePolicy.cwd === null
+                    ? []
+                    : [turn.input.runtimePolicy.cwd],
+                turn.input.runtimePolicy.cwd,
+                protectedRoots,
+              )
+            : data.action === "shell"
+              ? data.resources.reduce<string | null>(
+                  (found, resource) =>
+                    found ??
+                    checkOrchestrateShellCommand({
+                      command: resource,
+                      cwd: turn.input.runtimePolicy.cwd,
+                      protectedWorkspaceRoots: protectedRoots,
+                      unattendedTurn,
+                    }),
+                  null,
+                )
+              : null;
+        if (denial !== null) {
+          const sessionID = Session.ID.make(data.sessionID);
+          yield* client.session
+            .synthetic({
+              sessionID,
+              text: denial,
+              delivery: "steer",
+              resume: false,
+            })
+            .pipe(Effect.timeout(REQUEST_REPLY_TIMEOUT), Effect.ignore({ log: true }));
+          yield* deliver(
+            client.permission
+              .reply({
+                sessionID,
+                requestID: Permission.ID.make(data.id),
+                decision: "reject",
+                message: denial,
+              })
+              .pipe(Effect.catchTags(permissionGone)),
+          );
+          return;
+        }
+      }
       const toolName =
         data.source === undefined ? undefined : turn?.tools.get(data.source.id)?.name;
       const save = data.save ?? [];

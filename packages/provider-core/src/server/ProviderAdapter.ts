@@ -56,6 +56,11 @@ export const ProviderAdapterV2RuntimePolicy = Schema.Struct({
    * it; adapters use it to refuse native mode choices a user makes beside T3 Code's own.
    */
   maxRuntimeMode: Schema.optional(RuntimeMode),
+  /**
+   * Project workspace roots (and managed worktree directories) that Orchestrate mode must not
+   * mutate directly; implementation changes belong in delegated subagents.
+   */
+  protectedWorkspaceRoots: Schema.optional(Schema.Array(Schema.String)),
 });
 export type ProviderAdapterV2RuntimePolicy = typeof ProviderAdapterV2RuntimePolicy.Type;
 

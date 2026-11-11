@@ -87,6 +87,34 @@ describe("acpPermissionDisposition", () => {
   it("keeps non-mutating workspace permissions and denials unchanged", () => {
     assert.equal(acpPermissionDisposition(policy, permissionRequest("read")), "allow");
     assert.equal(acpPermissionDisposition(policy, permissionRequest("execute")), "deny");
+
+    const orchestratePolicy: AcpRuntimePolicy = {
+      runtimeMode: "full-access",
+      interactionMode: "orchestrate",
+      cwd: writableRoot,
+      protectedWorkspaceRoots: [cwd],
+    };
+    assert.equal(
+      acpPermissionDisposition(
+        orchestratePolicy,
+        permissionRequest("edit", [{ path: NodePath.join(cwd, "src/index.ts") }]),
+      ),
+      "deny",
+    );
+    assert.equal(
+      acpPermissionDisposition(
+        orchestratePolicy,
+        permissionRequest("edit", [{ path: NodePath.join(writableRoot, "MEMORY.md") }]),
+      ),
+      "allow",
+    );
+    assert.equal(
+      acpPermissionDisposition(
+        orchestratePolicy,
+        permissionRequest("read", [{ path: NodePath.join(cwd, "src/index.ts") }]),
+      ),
+      "allow",
+    );
   });
 
   it("auto-accept-edits approves file changes without locations and asks for the rest", () => {

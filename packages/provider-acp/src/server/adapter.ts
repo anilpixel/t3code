@@ -72,6 +72,10 @@ import type * as EffectAcpSchema from "effect-acp/compat";
 import { formatReadToolLabel, formatSearchToolLabel } from "@t3tools/shared/toolActivity";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import { makeAcpMcpOverAcpBridge, type AcpMcpOverAcpBridge } from "./mcpOverAcpBridge.ts";
+import {
+  checkOrchestrateFilePaths,
+  checkOrchestrateShellCommand,
+} from "@t3tools/provider-core/server/orchestrateGuard";
 import { mcpToolPresentation } from "@t3tools/provider-core/server/mcpToolPresentation";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
@@ -6360,6 +6364,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         const clientPolicyContext = Effect.map(Ref.get(activeTurn), (context) => ({
           policy: context?.input.runtimePolicy ?? latestRuntimePolicy,
           turnKey: context === null ? null : String(context.providerTurnId),
+          unattendedTurn: context !== null && context.input.message.createdBy !== "user",
         }));
 
         const denyClientRequest = (operation: string, disposition: "ask" | "deny") =>
@@ -6378,25 +6383,40 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             ),
           );
 
-        const guardClientTerminalCreate = clientPolicyContext.pipe(
-          Effect.flatMap(({ policy, turnKey }) => {
-            const disposition = acpClientExecuteDisposition(policy);
-            if (
-              disposition === "allow" ||
-              (disposition === "ask" && clientPolicyGrants.allowsExecute(turnKey))
-            ) {
-              return Effect.void;
-            }
-            return denyClientRequest("terminal/create", disposition);
-          }),
-        );
+        const guardClientTerminalCreate = (request: EffectAcpSchema.CreateTerminalRequest) =>
+          clientPolicyContext.pipe(
+            Effect.flatMap(({ policy, turnKey, unattendedTurn }) => {
+              if (policy.interactionMode === "orchestrate") {
+                const commandLine = [request.command, ...(request.args ?? [])].join(" ");
+                const denial = checkOrchestrateShellCommand({
+                  command: commandLine,
+                  cwd: request.cwd ?? policy.cwd,
+                  protectedWorkspaceRoots: policy.protectedWorkspaceRoots ?? [],
+                  unattendedTurn,
+                });
+                if (denial !== null) {
+                  return Effect.fail(EffectAcpErrors.AcpRequestError.internalError(denial));
+                }
+              }
+              const disposition = acpClientExecuteDisposition(policy);
+              if (
+                disposition === "allow" ||
+                (disposition === "ask" && clientPolicyGrants.allowsExecute(turnKey))
+              ) {
+                return Effect.void;
+              }
+              return denyClientRequest("terminal/create", disposition);
+            }),
+          );
 
         const wireAcpRuntimeTerminalHandlers = Effect.fnUntraced(function* (
           targetRuntime: AcpSessionRuntime.AcpSessionRuntime["Service"],
         ) {
           if (clientTerminals === undefined) return;
           yield* targetRuntime.handleCreateTerminal((request) =>
-            guardClientTerminalCreate.pipe(Effect.andThen(clientTerminals.create(request))),
+            guardClientTerminalCreate(request).pipe(
+              Effect.andThen(clientTerminals.create(request)),
+            ),
           );
           yield* targetRuntime.handleTerminalOutput(clientTerminals.output);
           yield* targetRuntime.handleTerminalWaitForExit(clientTerminals.waitForExit);
@@ -6473,7 +6493,19 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             if (writeTextFile !== undefined) {
               yield* targetRuntime.handleWriteTextFile((request) =>
                 clientPolicyContext.pipe(
-                  Effect.flatMap(({ policy }) => writeTextFile(request, policy.cwd)),
+                  Effect.flatMap(({ policy }) => {
+                    if (policy.interactionMode === "orchestrate") {
+                      const denial = checkOrchestrateFilePaths(
+                        [request.path],
+                        policy.cwd,
+                        policy.protectedWorkspaceRoots ?? [],
+                      );
+                      if (denial !== null) {
+                        return Effect.fail(EffectAcpErrors.AcpRequestError.internalError(denial));
+                      }
+                    }
+                    return writeTextFile(request, policy.cwd);
+                  }),
                 ),
               );
             }
@@ -6523,8 +6555,28 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               const dispositionFor = (
                 policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
                 request: EffectAcpSchema.RequestPermissionRequest = params,
-              ) => (flavor.permissionDisposition ?? acpPermissionDisposition)(policy, request);
-              if (followsAgentWorkState && dispositionFor(latestRuntimePolicy) === "ask") {
+                unattendedTurn = false,
+              ) =>
+                (flavor.permissionDisposition
+                  ? (
+                      p: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
+                      r: EffectAcpSchema.RequestPermissionRequest,
+                    ) =>
+                      acpPermissionDisposition(p, r, { unattendedTurn }) === "deny"
+                        ? "deny"
+                        : flavor.permissionDisposition!(p, r)
+                  : (
+                      p: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
+                      r: EffectAcpSchema.RequestPermissionRequest,
+                    ) => acpPermissionDisposition(p, r, { unattendedTurn }))(policy, request);
+              if (
+                followsAgentWorkState &&
+                dispositionFor(
+                  latestRuntimePolicy,
+                  params,
+                  trackedTurn !== null && trackedTurn.input.message.createdBy !== "user",
+                ) === "ask"
+              ) {
                 if (!(yield* awaitRequestTurn(handlerGeneration)))
                   return { outcome: { outcome: "cancelled" } } as const;
               }
@@ -6544,6 +6596,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     params.toolCall.kind == null && knownKind !== undefined
                       ? { ...params, toolCall: { ...params.toolCall, kind: knownKind } }
                       : params,
+                    context !== null && context.input.message.createdBy !== "user",
                   );
                   if (disposition === "allow") {
                     const optionId = selectAutoApprovedPermissionOption(params);

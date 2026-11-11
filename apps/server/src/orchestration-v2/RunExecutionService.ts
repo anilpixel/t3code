@@ -1413,21 +1413,47 @@ export const layer: Layer.Layer<
           ) {
             yield* Ref.set(latestRootProviderTurn, event.providerTurn);
           }
+          let normalizedEvent = event;
+          if (
+            normalizedEvent.type === "provider_thread.updated" &&
+            normalizedEvent.providerThread.id === input.providerThread.id
+          ) {
+            const currentProviderThread = yield* Ref.get(latestProviderThread);
+            normalizedEvent = {
+              ...normalizedEvent,
+              providerThread: {
+                ...normalizedEvent.providerThread,
+                orchestrateContextFingerprint:
+                  currentProviderThread.orchestrateContextFingerprint ?? null,
+              },
+            };
+          }
+          if (
+            normalizedEvent.type === "turn_item.updated" &&
+            normalizedEvent.turnItem.type === "compaction" &&
+            normalizedEvent.turnItem.status === "completed" &&
+            normalizedEvent.turnItem.providerThreadId === input.providerThread.id
+          ) {
+            yield* Ref.update(latestProviderThread, (current) => ({
+              ...current,
+              orchestrateContextFingerprint: null,
+            }));
+          }
           let storedEventCount = 0;
           const deliveredEvent = filterAssistantEvent(
-            event,
+            normalizedEvent,
             DateTime.toEpochMillis(yield* DateTime.now),
           );
           if (deliveredEvent) {
             const rootTerminalAlreadySeen = yield* Ref.get(rootTerminalSeen);
             const isRootProviderThreadUpdate =
-              event.type === "provider_thread.updated" &&
-              event.providerThread.id === input.providerThread.id;
+              normalizedEvent.type === "provider_thread.updated" &&
+              normalizedEvent.providerThread.id === input.providerThread.id;
             const nativeChildTurn =
-              event.type === "provider_turn.updated" &&
-              event.providerTurn.providerThreadId !== input.providerThread.id;
-            if (event.type === "provider_turn.updated" && !nativeChildTurn) {
-              firstRootProviderTurnId ??= event.providerTurn.id;
+              normalizedEvent.type === "provider_turn.updated" &&
+              normalizedEvent.providerTurn.providerThreadId !== input.providerThread.id;
+            if (normalizedEvent.type === "provider_turn.updated" && !nativeChildTurn) {
+              firstRootProviderTurnId ??= normalizedEvent.providerTurn.id;
             }
             const storedEvents = yield* providerEventIngestor.ingestNormalized({
               analyticsContext: nativeChildTurn
@@ -1439,8 +1465,8 @@ export const layer: Layer.Layer<
                 : {
                     ...analyticsContext,
                     segment:
-                      event.type === "provider_turn.updated" &&
-                      event.providerTurn.id !== firstRootProviderTurnId
+                      normalizedEvent.type === "provider_turn.updated" &&
+                      normalizedEvent.providerTurn.id !== firstRootProviderTurnId
                         ? "continuation"
                         : input.attempt.reason,
                   },
@@ -1474,29 +1500,34 @@ export const layer: Layer.Layer<
               yield* Ref.set(providerThreadOwnerLost, true);
             }
           } else if (
-            event.type === "turn_item.updated" &&
-            (event.turnItem.type === "assistant_message" || event.turnItem.type === "reasoning") &&
-            event.turnItem.streaming &&
-            !reservedHeldTurnItemIds.has(event.turnItem.id)
+            normalizedEvent.type === "turn_item.updated" &&
+            (normalizedEvent.turnItem.type === "assistant_message" ||
+              normalizedEvent.turnItem.type === "reasoning") &&
+            normalizedEvent.turnItem.streaming &&
+            !reservedHeldTurnItemIds.has(normalizedEvent.turnItem.id)
           ) {
             yield* turnItemPositions.allocate({
-              threadId: event.turnItem.threadId,
-              turnItemId: event.turnItem.id,
-              runId: event.turnItem.runId,
+              threadId: normalizedEvent.turnItem.threadId,
+              turnItemId: normalizedEvent.turnItem.id,
+              runId: normalizedEvent.turnItem.runId,
             });
-            reservedHeldTurnItemIds.add(event.turnItem.id);
+            reservedHeldTurnItemIds.add(normalizedEvent.turnItem.id);
           }
-          if (event.type === "provider_thread.updated") {
-            if (event.providerThread.id === input.providerThread.id && storedEventCount > 0) {
-              yield* Ref.set(latestProviderThread, event.providerThread);
+          if (normalizedEvent.type === "provider_thread.updated") {
+            if (
+              normalizedEvent.providerThread.id === input.providerThread.id &&
+              storedEventCount > 0
+            ) {
+              yield* Ref.set(latestProviderThread, normalizedEvent.providerThread);
             }
           }
           if (
-            event.type === "turn_item.updated" &&
-            event.turnItem.providerTurnId === (yield* Ref.get(eventRouting)).rootProviderTurnId
+            normalizedEvent.type === "turn_item.updated" &&
+            normalizedEvent.turnItem.providerTurnId ===
+              (yield* Ref.get(eventRouting)).rootProviderTurnId
           ) {
             yield* Ref.update(latestTurnItemOrdinal, (current) =>
-              Math.max(current, event.turnItem.ordinal),
+              Math.max(current, normalizedEvent.turnItem.ordinal),
             );
           }
           if (event.type === "turn.terminal") {
