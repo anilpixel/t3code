@@ -1,14 +1,21 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import type { ProviderRequestKind, RuntimeMode } from "@t3tools/contracts";
+import type { ProviderInteractionMode, ProviderRequestKind, RuntimeMode } from "@t3tools/contracts";
+import {
+  checkOrchestrateFilePaths,
+  checkOrchestrateShellCommand,
+  isPathWithinProtectedRoots,
+} from "@t3tools/provider-core/server/orchestrateGuard";
 import type * as EffectAcpSchema from "effect-acp/compat";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
 export interface AcpRuntimePolicy {
   readonly runtimeMode: RuntimeMode;
+  readonly interactionMode?: ProviderInteractionMode | undefined;
   readonly cwd: string | null;
   readonly approvalPolicy?: unknown;
   readonly sandboxPolicy?: unknown;
+  readonly protectedWorkspaceRoots?: ReadonlyArray<string> | undefined;
 }
 
 export type AcpPermissionDisposition = "allow" | "ask" | "deny";
@@ -71,6 +78,8 @@ function acpCanonicalPathForContainment(path: string): string | undefined {
 interface AcpPolicyOperation {
   readonly kind: string | null | undefined;
   readonly locations: ReadonlyArray<{ readonly path: string }> | null | undefined;
+  readonly command?: string | undefined;
+  readonly unattendedTurn?: boolean | undefined;
 }
 
 function acpPolicyRequiresApproval(runtimePolicy: AcpRuntimePolicy): boolean {
@@ -145,6 +154,43 @@ function acpOperationDisposition(
   operation: AcpPolicyOperation,
 ): AcpPermissionDisposition {
   const toolKind = operation.kind ?? "other";
+  if (runtimePolicy.interactionMode === "orchestrate") {
+    const protectedRoots = runtimePolicy.protectedWorkspaceRoots ?? [];
+    if (isAcpMutationKind(toolKind) && protectedRoots.length > 0) {
+      if (
+        operation.locations !== undefined &&
+        operation.locations !== null &&
+        operation.locations.length > 0
+      ) {
+        if (
+          checkOrchestrateFilePaths(
+            operation.locations.map((entry) => entry.path),
+            runtimePolicy.cwd,
+            protectedRoots,
+          ) !== null
+        ) {
+          return "deny";
+        }
+      } else if (
+        runtimePolicy.cwd !== null &&
+        isPathWithinProtectedRoots(runtimePolicy.cwd, null, protectedRoots) !== null
+      ) {
+        return "deny";
+      }
+    }
+    if (toolKind === "execute" && operation.command !== undefined) {
+      if (
+        checkOrchestrateShellCommand({
+          command: operation.command,
+          cwd: runtimePolicy.cwd,
+          protectedWorkspaceRoots: protectedRoots,
+          unattendedTurn: operation.unattendedTurn === true,
+        }) !== null
+      ) {
+        return "deny";
+      }
+    }
+  }
   if (isAcpReadKind(toolKind)) {
     return acpReadDisposition(runtimePolicy);
   }
@@ -192,10 +238,20 @@ function isAcpMutationKind(toolKind: string): boolean {
 export function acpPermissionDisposition(
   runtimePolicy: AcpRuntimePolicy,
   request: EffectAcpSchema.RequestPermissionRequest,
+  options?: { readonly unattendedTurn?: boolean },
 ): AcpPermissionDisposition {
+  const rawInput = unknownRecord(request.toolCall.rawInput);
+  const command =
+    typeof rawInput?.command === "string"
+      ? rawInput.command
+      : typeof rawInput?.cmd === "string"
+        ? rawInput.cmd
+        : undefined;
   return acpOperationDisposition(runtimePolicy, {
     kind: request.toolCall.kind,
     locations: request.toolCall.locations,
+    ...(command === undefined ? {} : { command }),
+    ...(options?.unattendedTurn === undefined ? {} : { unattendedTurn: options.unattendedTurn }),
   });
 }
 

@@ -222,6 +222,49 @@ describe("CodexAdapterV2 runtime policy", () => {
       assert.equal(fullAccess.approvalPolicy, "never");
       assert.equal(fullAccess.approvalsReviewer, "user");
       assert.equal(fullAccess.sandboxPolicy?.type, "dangerFullAccess");
+
+      const orchestrateProtectedCwd = yield* CodexAdapterV2.buildCodexTurnStartParams({
+        nativeThreadId: "native-orchestrate-protected",
+        codexInput: [{ type: "text", text: "test" }],
+        runtimePolicy: {
+          runtimeMode: "full-access",
+          interactionMode: "orchestrate",
+          cwd: "/repo",
+          protectedWorkspaceRoots: ["/repo"],
+        },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.4",
+        },
+        unattendedTurn: false,
+      });
+      assert.equal(orchestrateProtectedCwd.approvalPolicy, "never");
+      assert.deepEqual(orchestrateProtectedCwd.sandboxPolicy, {
+        type: "readOnly",
+        networkAccess: true,
+      });
+
+      const orchestrateSandboxCwdUnattended = yield* CodexAdapterV2.buildCodexTurnStartParams({
+        nativeThreadId: "native-orchestrate-sandbox",
+        codexInput: [{ type: "text", text: "test" }],
+        runtimePolicy: {
+          runtimeMode: "full-access",
+          interactionMode: "orchestrate",
+          cwd: "/sandbox",
+          protectedWorkspaceRoots: ["/repo"],
+        },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.4",
+        },
+        unattendedTurn: true,
+      });
+      assert.equal(orchestrateSandboxCwdUnattended.approvalPolicy, "untrusted");
+      assert.deepEqual(orchestrateSandboxCwdUnattended.sandboxPolicy, {
+        type: "workspaceWrite",
+        writableRoots: ["/sandbox"],
+        networkAccess: true,
+      });
     }),
   );
 

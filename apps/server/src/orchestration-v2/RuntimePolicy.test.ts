@@ -16,6 +16,7 @@ import * as Stream from "effect/Stream";
 
 import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
 import { acpPermissionDisposition } from "@t3tools/provider-acp/server/clientPolicy";
+import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as ProjectStore from "./ProjectStore.ts";
@@ -32,6 +33,7 @@ function makeThread(input: {
   readonly now: DateTime.Utc;
   readonly worktreePath: string | null;
   readonly runtimeMode?: RuntimeMode;
+  readonly interactionMode?: OrchestrationV2AppThread["interactionMode"];
 }): OrchestrationV2AppThread {
   const threadId = ThreadId.make("thread:runtime-policy");
   return {
@@ -43,7 +45,7 @@ function makeThread(input: {
     providerInstanceId,
     modelSelection,
     runtimeMode: input.runtimeMode ?? "full-access",
-    interactionMode: "default",
+    interactionMode: input.interactionMode ?? "default",
     branch: null,
     worktreePath: input.worktreePath,
     activeProviderThreadId: null,
@@ -78,9 +80,33 @@ const providerInstanceFor = (instanceId: ProviderInstanceId) =>
     },
   }) as ProviderInstance;
 
+const baseProjectRow = {
+  projectId,
+  title: "Project",
+  workspaceRoot: "/project-root",
+  defaultModelSelection: null,
+  defaultThreadEnvMode: null,
+  autoPull: false,
+  faviconPath: null,
+  projectIcon: null,
+  scripts: [],
+  pinnedAt: null,
+  archivedAt: null,
+  createdAt: "2026-06-21T00:00:00.000Z",
+  updatedAt: "2026-06-21T00:00:00.000Z",
+  deletedAt: null,
+} as const;
+
 const layerWithPolicy = (policy?: ManagedPolicySummary) =>
   RuntimePolicy.layerFromProjectStore.pipe(
     Layer.provide(ServerSettings.layerTest({}, policy)),
+    Layer.provide(
+      Layer.succeed(ServerConfig.ServerConfig, {
+        baseDir: "/t3-home",
+        stateDir: "/t3-home/userdata",
+        worktreesDir: "/t3-home/worktrees",
+      } as ServerConfig.ServerConfig["Service"]),
+    ),
     Layer.provide(
       Layer.succeed(ProviderInstanceRegistry.ProviderInstanceRegistry, {
         getInstance: (instanceId) => Effect.succeed(providerInstanceFor(instanceId)),
@@ -92,23 +118,23 @@ const layerWithPolicy = (policy?: ManagedPolicySummary) =>
     ),
     Layer.provide(
       Layer.mock(ProjectStore.ProjectStoreV2)({
-        get: () =>
-          Effect.succeedSome({
-            projectId,
-            title: "Project",
-            workspaceRoot: "/project-root",
-            defaultModelSelection: null,
-            defaultThreadEnvMode: null,
-            autoPull: false,
-            faviconPath: null,
-            projectIcon: null,
-            scripts: [],
-            pinnedAt: null,
-            archivedAt: null,
-            createdAt: "2026-06-21T00:00:00.000Z",
-            updatedAt: "2026-06-21T00:00:00.000Z",
-            deletedAt: null,
-          }),
+        get: () => Effect.succeedSome(baseProjectRow),
+        list: () =>
+          Effect.succeed([
+            baseProjectRow,
+            {
+              ...baseProjectRow,
+              projectId: ProjectId.make("project:scratch"),
+              title: "No project",
+              workspaceRoot: "/t3-home/scratch",
+            },
+            {
+              ...baseProjectRow,
+              projectId: ProjectId.make("project:orchestrator"),
+              title: "Chief Agent",
+              workspaceRoot: "/t3-home/userdata/orchestrator",
+            },
+          ]),
       }),
     ),
   );
@@ -155,6 +181,33 @@ it.layer(layerTest)("RuntimePolicyV2", (it) => {
       assert.equal(yield* modeFor(grokInstanceId, "full-access"), "full-access");
       assert.equal(yield* modeFor(providerInstanceId, "auto-accept-edits"), "auto-accept-edits");
     }),
+  );
+
+  it.effect(
+    "populates protectedWorkspaceRoots only in orchestrate mode and excludes internal sandboxes",
+    () =>
+      Effect.gen(function* () {
+        const policy = yield* RuntimePolicy.RuntimePolicyV2;
+        const now = yield* DateTime.now;
+        const defaultResolved = yield* policy.resolve({
+          thread: makeThread({ now, worktreePath: null, interactionMode: "default" }),
+          modelSelection,
+        });
+        assert.isUndefined(defaultResolved.protectedWorkspaceRoots);
+
+        const orchestrateResolved = yield* policy.resolve({
+          thread: makeThread({
+            now,
+            worktreePath: "/t3-home/userdata/orchestrator",
+            interactionMode: "orchestrate",
+          }),
+          modelSelection,
+        });
+        assert.deepStrictEqual(orchestrateResolved.protectedWorkspaceRoots, [
+          "/project-root",
+          "/t3-home/worktrees",
+        ]);
+      }),
   );
 });
 

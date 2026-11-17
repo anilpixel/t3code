@@ -14,6 +14,10 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+// @effect-diagnostics-next-line nodeBuiltinImport:off
+import * as NodePath from "node:path";
+
+import * as ServerConfig from "../config.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ServerSettings from "../serverSettings.ts";
@@ -148,9 +152,29 @@ export const layerFromProjectStore: Layer.Layer<
   Effect.gen(function* () {
     const projects = yield* ProjectStore.ProjectStoreV2;
     const providerInstances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
+    const serverConfig = yield* Effect.serviceOption(ServerConfig.ServerConfig);
     // The same ceiling the orchestrator enforces, fixed for the server's life.
     const { managedPolicy } = yield* ServerSettings.ServerSettingsService;
     const maxRuntimeMode = managedPolicy?.limits?.maxRuntimeMode;
+    const internalSandboxRoots = Option.match(serverConfig, {
+      onNone: () => [] as ReadonlyArray<string>,
+      onSome: (config) => [
+        NodePath.resolve(config.baseDir, "scratch"),
+        NodePath.resolve(config.baseDir, "orchestrator"),
+        NodePath.resolve(config.stateDir, "scratch"),
+        NodePath.resolve(config.stateDir, "orchestrator"),
+      ],
+    });
+    const isInternalSandboxRoot = (workspaceRoot: string): boolean => {
+      const resolved = NodePath.resolve(workspaceRoot);
+      return internalSandboxRoots.some(
+        (sandboxRoot) =>
+          resolved === sandboxRoot ||
+          resolved.startsWith(
+            sandboxRoot.endsWith(NodePath.sep) ? sandboxRoot : `${sandboxRoot}${NodePath.sep}`,
+          ),
+      );
+    };
     return RuntimePolicyV2.of({
       resolve: Effect.fn("RuntimePolicyV2.resolve")(function* (input) {
         yield* refuseAboveCeiling(managedPolicy, input.thread);
@@ -184,11 +208,37 @@ export const layerFromProjectStore: Layer.Layer<
               }),
             ),
           ));
+        const protectedWorkspaceRoots =
+          input.thread.interactionMode !== "orchestrate"
+            ? undefined
+            : yield* projects.list().pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new RuntimePolicyResolveError({
+                      projectId: input.thread.projectId,
+                      providerInstanceId: input.modelSelection.instanceId,
+                      cause,
+                    }),
+                ),
+                Effect.map((rows) => {
+                  const roots = new Set<string>();
+                  for (const row of rows) {
+                    if (!isInternalSandboxRoot(row.workspaceRoot)) {
+                      roots.add(row.workspaceRoot);
+                    }
+                  }
+                  if (Option.isSome(serverConfig)) {
+                    roots.add(serverConfig.value.worktreesDir);
+                  }
+                  return Array.from(roots);
+                }),
+              );
         return ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
           runtimeMode: providerRuntimeMode(input.thread.runtimeMode, supportedRuntimeModes),
           interactionMode: input.thread.interactionMode,
           cwd,
           ...(maxRuntimeMode === undefined ? {} : { maxRuntimeMode }),
+          ...(protectedWorkspaceRoots === undefined ? {} : { protectedWorkspaceRoots }),
         });
       }),
     });

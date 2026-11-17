@@ -72,6 +72,7 @@ import type {
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- the SDK takes a Node ChildProcess for the CLI.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeUtil from "node:util";
+import { checkOrchestrateToolGuard } from "@t3tools/provider-core/server/orchestrateGuard";
 import { parseCliArgs } from "@t3tools/shared/cliArgs";
 import { fromLenientJson } from "@t3tools/shared/schemaJson";
 import {
@@ -1777,6 +1778,7 @@ export function makeClaudeQueryOptions(input: {
   readonly appendSystemPromptFileText?: string;
   // Flag settings, because a user's settings.json env beats the process env in Claude Code.
   readonly toolSearchOverride?: "true";
+  readonly preToolUseHook?: HookCallback;
 }): ClaudeAgentSdkQueryOptions {
   const compiledSelection = compileClaudeModelSelection(input.modelSelection, input.modelCatalog);
   const {
@@ -1833,6 +1835,12 @@ export function makeClaudeQueryOptions(input: {
           env: { ...compactQuerySettings?.env, ENABLE_TOOL_SEARCH: input.toolSearchOverride },
         } as ClaudeSdkSettings);
   const deviceInstructions = input.mcpServers !== undefined && input.deviceToolsAvailable === true;
+  const hooks: NonNullable<ClaudeAgentSdkQueryOptions["hooks"]> = {
+    ...(deviceInstructions ? { SubagentStart: [{ hooks: [subagentDeviceInstructions] }] } : {}),
+    ...(input.preToolUseHook === undefined
+      ? {}
+      : { PreToolUse: [{ hooks: [input.preToolUseHook] }] }),
+  };
   const options: ClaudeAgentSdkQueryOptions = {
     model: compiledSelection.apiModelId,
     // T3 names threads; a supplied title skips Claude's redundant naming request.
@@ -1897,9 +1905,7 @@ export function makeClaudeQueryOptions(input: {
         ...launchAppendSystemPrompt,
       ].join("\n\n"),
     },
-    ...(deviceInstructions
-      ? { hooks: { SubagentStart: [{ hooks: [subagentDeviceInstructions] }] } }
-      : {}),
+    ...(Object.keys(hooks).length === 0 ? {} : { hooks }),
     ...(Object.keys(extraArgs).length === 0 ? {} : { extraArgs }),
   };
   const additionalDirectories = [
@@ -2855,6 +2861,7 @@ export interface ClaudeRuntimeQueryPolicy {
   readonly allowedTools?: ReadonlyArray<string>;
   readonly allowDangerouslySkipPermissions?: true;
   readonly installPermissionCallback: boolean;
+  readonly orchestrateGuard?: true;
 }
 
 interface ClaudeBypassAvailability {
@@ -2910,6 +2917,7 @@ export function claudeRuntimeQueryPolicyForRuntimePolicy(
     ...(allowedTools === undefined ? {} : { allowedTools }),
     ...(permissionMode === "bypassPermissions" ? { allowDangerouslySkipPermissions: true } : {}),
     installPermissionCallback,
+    ...(runtimePolicy.interactionMode === "orchestrate" ? { orchestrateGuard: true as const } : {}),
   };
 }
 
@@ -3018,6 +3026,7 @@ function claudeRuntimeQueryPolicyKey(policy: ClaudeRuntimeQueryPolicy): string {
     allowedTools: policy.allowedTools,
     allowDangerouslySkipPermissions: policy.allowDangerouslySkipPermissions,
     installPermissionCallback: policy.installPermissionCallback,
+    ...(policy.orchestrateGuard === undefined ? {} : { orchestrateGuard: policy.orchestrateGuard }),
   });
 }
 
@@ -10445,6 +10454,23 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             } satisfies PermissionResult;
           }
 
+          if (context.input.runtimePolicy.interactionMode === "orchestrate") {
+            const denial = checkOrchestrateToolGuard({
+              toolName,
+              toolInput,
+              cwd: context.input.runtimePolicy.cwd,
+              protectedWorkspaceRoots: context.input.runtimePolicy.protectedWorkspaceRoots ?? [],
+              unattendedTurn: context.input.message.createdBy !== "user",
+            });
+            if (denial !== null) {
+              return {
+                behavior: "deny",
+                message: denial,
+                toolUseID: callbackOptions.toolUseID,
+              } satisfies PermissionResult;
+            }
+          }
+
           if (
             context.input.runtimePolicy.interactionMode === "plan" &&
             context.input.runtimePolicy.approvalPolicy === "never"
@@ -10939,6 +10965,42 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             turnInput.runtimePolicy.cwd,
             launchArgSettings,
           );
+          const orchestratePreToolUseHook: HookCallback | undefined =
+            queryPolicy.orchestrateGuard === true
+              ? (hookInput) =>
+                  runPromise(
+                    Effect.gen(function* () {
+                      if (hookInput.hook_event_name !== "PreToolUse") return {};
+                      const currentTurn = yield* Ref.get(activeTurn);
+                      const policy = currentTurn?.input.runtimePolicy ?? turnInput.runtimePolicy;
+                      if (policy.interactionMode !== "orchestrate") return {};
+                      const unattendedTurn =
+                        (currentTurn?.input.message.createdBy ?? turnInput.message.createdBy) !==
+                        "user";
+                      const recordInput =
+                        typeof hookInput.tool_input === "object" &&
+                        hookInput.tool_input !== null &&
+                        !Array.isArray(hookInput.tool_input)
+                          ? (hookInput.tool_input as Record<string, unknown>)
+                          : {};
+                      const denial = checkOrchestrateToolGuard({
+                        toolName: hookInput.tool_name,
+                        toolInput: recordInput,
+                        cwd: policy.cwd,
+                        protectedWorkspaceRoots: policy.protectedWorkspaceRoots ?? [],
+                        unattendedTurn,
+                      });
+                      if (denial === null) return {};
+                      return {
+                        hookSpecificOutput: {
+                          hookEventName: "PreToolUse" as const,
+                          permissionDecision: "deny" as const,
+                          permissionDecisionReason: denial,
+                        },
+                      };
+                    }),
+                  )
+              : undefined;
           const queryOptions = makeClaudeQueryOptions({
             modelSelection: turnInput.modelSelection,
             modelCatalog,
@@ -10977,6 +11039,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   allowDangerouslySkipPermissions: queryPolicy.allowDangerouslySkipPermissions,
                 }),
             canUseTool,
+            ...(orchestratePreToolUseHook === undefined
+              ? {}
+              : { preToolUseHook: orchestratePreToolUseHook }),
             onUserDialog,
             onElicitation,
             supportedDialogKinds: ["resume_return"],

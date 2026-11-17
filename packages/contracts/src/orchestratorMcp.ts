@@ -168,6 +168,12 @@ export type OrchestratorMcpTerminalDelegatedTaskStatus =
 
 export const OrchestratorMcpDelegateTaskInput = Schema.Struct({
   task: OrchestratorMcpPrompt,
+  continueTaskId: Schema.optional(
+    NodeId.annotate({
+      description:
+        "Settled local `taskId` from this thread to continue in its existing child thread, branch, and worktree. Returns a new `taskId`.",
+    }),
+  ),
   target: Schema.optional(OrchestratorMcpTarget),
   title: Schema.optional(OrchestratorMcpTitle),
   role: Schema.optional(OrchestratorMcpTaskRole),

@@ -1,7 +1,9 @@
 import { assert, describe, it } from "@effect/vitest";
 
 import {
+  buildOrchestrateModeExitNote,
   buildOrchestrateTurnInstructions,
+  computeOrchestrateContextFingerprint,
   T3_CODE_DEVICE_TOOL_INSTRUCTIONS,
   T3_CODE_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH,
   T3_CODE_ORCHESTRATION_INSTRUCTIONS,
@@ -98,7 +100,8 @@ describe("T3 device instructions", () => {
     assert.include(exitedOrchestrate, "## T3 Code interaction mode: Default");
   });
 
-  it("formats registered projects with current project first in orchestrate turn instructions", () => {
+  it("formats stateful orchestrate instructions, exit note, and deterministic fingerprints", () => {
+    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "`continueTaskId`");
     const block = buildOrchestrateTurnInstructions({
       currentProjectId: "proj-hub",
       projects: [
@@ -108,9 +111,29 @@ describe("T3 device instructions", () => {
     });
     assert.include(block, "<t3_code_orchestrate_mode>");
     assert.include(block, "`delegate_task`");
+    assert.include(block, "`continueTaskId`");
+    assert.include(block, "<t3_code_orchestrate_mode_exit>");
     assert.include(
       block,
       "- workspace-hub (projectId: `proj-hub`, workspaceRoot: `/home/user/workspace-hub`, current)\n- web-client (projectId: `proj-web`, workspaceRoot: `/home/user/web-client`)",
+    );
+
+    const exitNote = buildOrchestrateModeExitNote();
+    assert.include(exitNote, "<t3_code_orchestrate_mode_exit>");
+    assert.include(exitNote, "</t3_code_orchestrate_mode_exit>");
+
+    const fp1 = computeOrchestrateContextFingerprint(block);
+    assert.equal(fp1, computeOrchestrateContextFingerprint(block));
+    assert.notEqual(
+      fp1,
+      computeOrchestrateContextFingerprint(
+        buildOrchestrateTurnInstructions({
+          currentProjectId: "proj-hub",
+          projects: [
+            { id: "proj-hub", title: "workspace-hub", workspaceRoot: "/home/user/workspace-hub" },
+          ],
+        }),
+      ),
     );
   });
 });

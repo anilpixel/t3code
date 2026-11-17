@@ -3695,6 +3695,7 @@ function runBackgroundItemScenario(
   makeEvents: (ids: BackgroundScenarioIds) => ReadonlyArray<ProviderAdapter.ProviderAdapterV2Event>,
   options?: {
     readonly keepEventStreamOpen?: boolean;
+    readonly initialOrchestrateFingerprint?: string | null;
     readonly hasPendingBackgroundWorkForThread?: (
       providerThread: OrchestrationV2ProviderThread,
     ) => Effect.Effect<boolean>;
@@ -3759,6 +3760,13 @@ function runBackgroundItemScenario(
                     `subagent:${event.subagent.status}`,
                   ]);
                 }
+                if (event.type === "provider_thread.updated") {
+                  yield* Ref.update(observed, (current) => [
+                    ...current,
+                    `provider_thread:${event.providerThread.orchestrateContextFingerprint ?? "null"}`,
+                  ]);
+                  return [{} as never];
+                }
                 return [];
               }),
           }),
@@ -3813,6 +3821,9 @@ function runBackgroundItemScenario(
         providerThread: {
           id: ids.providerThreadId,
           driver,
+          ...(options?.initialOrchestrateFingerprint === undefined
+            ? {}
+            : { orchestrateContextFingerprint: options.initialOrchestrateFingerprint }),
         } as OrchestrationV2ProviderThread,
         attempt: {
           id: ids.attemptId,
@@ -3899,4 +3910,98 @@ it.effect("keeps a failed root's still-running native children live while the ru
       "a child that outlives the failed root must not be settled with it",
     );
   }),
+);
+
+it.effect(
+  "preserves orchestrateContextFingerprint across mid-turn provider_thread updates and clears it on completed compaction",
+  () =>
+    Effect.gen(function* () {
+      const preservedFinalized = yield* Ref.make<ReadonlyArray<OrchestrationV2DomainEvent>>([]);
+      const preservedObserved = yield* runBackgroundItemScenario(
+        "orchestrate-fingerprint-preserve",
+        (ids) => [
+          {
+            type: "provider_thread.updated",
+            driver,
+            threadId: ids.threadId,
+            providerThread: {
+              id: ids.providerThreadId,
+              driver,
+            } as OrchestrationV2ProviderThread,
+          },
+          rootTerminalEvent(ids, "completed"),
+        ],
+        {
+          initialOrchestrateFingerprint: "fp-projects-v1",
+          onFinalized: (events) => Ref.set(preservedFinalized, events),
+        },
+      );
+      assert.deepEqual(preservedObserved, ["provider_thread:fp-projects-v1", "root-finalized"]);
+      const preservedThread = (yield* Ref.get(preservedFinalized)).find(
+        (event) => event.type === "provider-thread.updated",
+      );
+      assert.equal(
+        preservedThread?.type === "provider-thread.updated"
+          ? preservedThread.payload.orchestrateContextFingerprint
+          : undefined,
+        "fp-projects-v1",
+      );
+
+      const compactedFinalized = yield* Ref.make<ReadonlyArray<OrchestrationV2DomainEvent>>([]);
+      const compactedObserved = yield* runBackgroundItemScenario(
+        "orchestrate-fingerprint-compact",
+        (ids) => [
+          {
+            type: "turn_item.updated",
+            driver,
+            threadId: ids.threadId,
+            turnItem: {
+              id: TurnItemId.make(`item:${ids.runId}:compaction`),
+              threadId: ids.threadId,
+              runId: ids.runId,
+              nodeId: ids.rootNodeId,
+              providerThreadId: ids.providerThreadId,
+              providerTurnId: ids.rootProviderTurnId,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: 1,
+              type: "compaction",
+              driver,
+              status: "completed",
+              title: "Context compacted",
+              startedAt: null,
+              completedAt: null,
+              updatedAt: DateTime.makeUnsafe(0),
+            } as OrchestrationV2TurnItem,
+          },
+          {
+            type: "provider_thread.updated",
+            driver,
+            threadId: ids.threadId,
+            providerThread: {
+              id: ids.providerThreadId,
+              driver,
+            } as OrchestrationV2ProviderThread,
+          },
+          rootTerminalEvent(ids, "completed"),
+        ],
+        {
+          initialOrchestrateFingerprint: "fp-projects-v1",
+          onFinalized: (events) => Ref.set(compactedFinalized, events),
+        },
+      );
+      assert.deepEqual(compactedObserved, [
+        "turn_item:completed",
+        "provider_thread:null",
+        "root-finalized",
+      ]);
+      const compactedThread = (yield* Ref.get(compactedFinalized)).find(
+        (event) => event.type === "provider-thread.updated",
+      );
+      assert.isNull(
+        compactedThread?.type === "provider-thread.updated"
+          ? compactedThread.payload.orchestrateContextFingerprint
+          : undefined,
+      );
+    }),
 );

@@ -52,6 +52,11 @@ import { getModelSelectionStringOptionValue, modelSelectionsEqual } from "@t3too
 import { appendGeneratedImageEmbeds } from "@t3tools/shared/generatedImageMarkdown";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { mcpToolResultOutput } from "@t3tools/shared/toolOutput";
+import {
+  checkOrchestrateFilePaths,
+  checkOrchestrateShellCommand,
+  isPathWithinProtectedRoots,
+} from "@t3tools/provider-core/server/orchestrateGuard";
 import type {
   ChatAttachment,
   OrchestrationV2AppThread,
@@ -772,16 +777,32 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
     /** ChatGPT token sharing does not accept service tiers. */
     readonly omitServiceTier?: boolean;
     readonly appContext?: ProviderAdapter.ProviderAdapterV2TurnInput["appContext"];
+    readonly unattendedTurn?: boolean;
   }) {
     const runtimeModeDefaults = codexRuntimeModeTurnDefaults(input.runtimePolicy.runtimeMode);
+    const protectedRoots = input.runtimePolicy.protectedWorkspaceRoots ?? [];
+    const orchestrateActive = input.runtimePolicy.interactionMode === "orchestrate";
     const approvalPolicy =
       input.runtimePolicy.approvalPolicy === undefined
-        ? runtimeModeDefaults.approvalPolicy
+        ? orchestrateActive &&
+          input.unattendedTurn === true &&
+          runtimeModeDefaults.approvalPolicy === "never"
+          ? "untrusted"
+          : runtimeModeDefaults.approvalPolicy
         : yield* decodeTurnApprovalPolicy(input.runtimePolicy.approvalPolicy);
-    const sandboxPolicy =
-      input.runtimePolicy.sandboxPolicy === undefined
-        ? runtimeModeDefaults.sandboxPolicy
-        : yield* decodeTurnSandboxPolicy(input.runtimePolicy.sandboxPolicy);
+    const sandboxPolicy: CodexSchema.V2TurnStartParams["sandboxPolicy"] =
+      input.runtimePolicy.sandboxPolicy !== undefined
+        ? yield* decodeTurnSandboxPolicy(input.runtimePolicy.sandboxPolicy)
+        : orchestrateActive && protectedRoots.length > 0
+          ? input.runtimePolicy.cwd === null ||
+            isPathWithinProtectedRoots(input.runtimePolicy.cwd, null, protectedRoots) !== null
+            ? { type: "readOnly", networkAccess: true }
+            : {
+                type: "workspaceWrite",
+                writableRoots: [input.runtimePolicy.cwd],
+                networkAccess: true,
+              }
+          : runtimeModeDefaults.sandboxPolicy;
     const selectedEffort =
       getModelSelectionStringOptionValue(input.modelSelection, "reasoningEffort") ??
       codexDefaultReasoningEffortOverride(input.modelSelection.model);
@@ -5365,6 +5386,33 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 payload,
               );
             }
+            if (
+              context.subagent === null &&
+              context.input.runtimePolicy.interactionMode === "orchestrate"
+            ) {
+              if (payload.command !== undefined && payload.command !== null) {
+                const denial = checkOrchestrateShellCommand({
+                  command: payload.command,
+                  cwd: payload.cwd ?? context.input.runtimePolicy.cwd,
+                  protectedWorkspaceRoots:
+                    context.input.runtimePolicy.protectedWorkspaceRoots ?? [],
+                  unattendedTurn: context.input.message.createdBy !== "user",
+                });
+                if (denial !== null) {
+                  return {
+                    decision: "decline",
+                  } satisfies CodexSchema.CommandExecutionRequestApprovalResponse;
+                }
+              }
+              if (
+                context.input.runtimePolicy.runtimeMode === "full-access" &&
+                context.input.runtimePolicy.approvalPolicy === undefined
+              ) {
+                return {
+                  decision: "accept",
+                } satisfies CodexSchema.CommandExecutionRequestApprovalResponse;
+              }
+            }
             const allowance = sessionAllowance(payload.threadId, context);
             if (allowance.has("command")) {
               return {
@@ -5435,6 +5483,30 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 `No active Codex turn context for file change approval turn ${payload.turnId}.`,
                 payload,
               );
+            }
+            if (
+              context.subagent === null &&
+              context.input.runtimePolicy.interactionMode === "orchestrate"
+            ) {
+              const changedPaths = Object.keys(
+                context.fileChangeKindsByItem.get(payload.itemId) ?? {},
+              );
+              const pathsToCheck =
+                changedPaths.length > 0
+                  ? changedPaths
+                  : context.input.runtimePolicy.cwd === null
+                    ? []
+                    : [context.input.runtimePolicy.cwd];
+              const denial = checkOrchestrateFilePaths(
+                pathsToCheck,
+                context.input.runtimePolicy.cwd,
+                context.input.runtimePolicy.protectedWorkspaceRoots ?? [],
+              );
+              if (denial !== null) {
+                return {
+                  decision: "decline",
+                } satisfies CodexSchema.FileChangeRequestApprovalResponse;
+              }
             }
             const allowance = sessionAllowance(payload.threadId, context);
             if (allowance.has("file-change")) {
@@ -6860,6 +6932,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               browserToolsAvailable: mcpSession?.browserToolsAvailable ?? true,
               deviceToolsAvailable: mcpSession?.capabilities?.has("device") ?? false,
               omitServiceTier: adapterOptions.resolveRuntime !== undefined,
+              unattendedTurn: turnInput.message.createdBy !== "user",
               ...(turnInput.appContext === undefined ? {} : { appContext: turnInput.appContext }),
             });
             yield* Ref.update(pendingRootTurns, (current) => {

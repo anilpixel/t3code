@@ -480,6 +480,22 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
       allowDangerouslySkipPermissions: true,
       installPermissionCallback: false,
     });
+
+    const orchestrateQueryPolicy = ClaudeAdapterV2.claudeRuntimeQueryPolicyForRuntimePolicy(
+      ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "orchestrate",
+        cwd: "/sandbox",
+        protectedWorkspaceRoots: ["/workspace"],
+      }),
+    );
+
+    assert.deepEqual(orchestrateQueryPolicy, {
+      permissionMode: "bypassPermissions",
+      allowDangerouslySkipPermissions: true,
+      installPermissionCallback: false,
+      orchestrateGuard: true,
+    });
   });
 
   it("keeps approval checks when Full access must fall back to an allowed Claude mode", () => {

@@ -46,7 +46,11 @@ import {
   latestNativeContextUsage,
 } from "@t3tools/provider-core/server/handoffBudget";
 import { deliverContextHandoffs, withInlineContext } from "./ContextHandoffDelivery.ts";
-import { buildOrchestrateTurnInstructions } from "@t3tools/provider-core/server/orchestrationInstructions";
+import {
+  buildOrchestrateModeExitNote,
+  buildOrchestrateTurnInstructions,
+  computeOrchestrateContextFingerprint,
+} from "@t3tools/provider-core/server/orchestrationInstructions";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -871,18 +875,20 @@ export const layer: Layer.Layer<
         restartCancelledWork.length === 0
           ? ""
           : restartCancelledBackgroundWorkNote(restartCancelledWork);
-      const orchestrateNote =
+      const compactionCommand = isCompactionCommandMessage(message);
+      const candidateOrchestrateInstructions =
         resolvedRuntimePolicy.interactionMode === "orchestrate" &&
-        !isCompactionCommandMessage(message) &&
+        !compactionCommand &&
         !goalCommand
           ? buildOrchestrateTurnInstructions({
               currentProjectId: projection.thread.projectId,
               projects: yield* projects.listShells().pipe(Effect.orElseSucceed(() => [])),
             })
           : "";
-      const inlineTurnNotes = [restartNote, orchestrateNote]
-        .filter((part) => part !== "")
-        .join("\n\n");
+      const candidateOrchestrateFingerprint =
+        candidateOrchestrateInstructions === ""
+          ? null
+          : computeOrchestrateContextFingerprint(candidateOrchestrateInstructions);
       const tokenCap = yield* handoffTokenCapConfig.pipe(
         Effect.orElseSucceed(() => DEFAULT_HANDOFF_TOKEN_CAP),
       );
@@ -955,6 +961,35 @@ export const layer: Layer.Layer<
             .filter((source) => source.nativeThreadId === undefined)
             .map((source) => source.runId),
         );
+        const nativeThreadHasTurns =
+          nativeInputRunIds.size > 0 ||
+          (legacyInputRunIds.size > 0 &&
+            sameNativeThread &&
+            !acceptedAttempts.some((source) => source.nativeThreadId !== undefined));
+        const persistedOrchestrateFingerprint =
+          sameNativeThread && providerThread.nativeThreadRef !== null && nativeThreadHasTurns
+            ? (providerThread.orchestrateContextFingerprint ?? null)
+            : null;
+        const orchestrateNote =
+          compactionCommand || goalCommand
+            ? ""
+            : resolvedRuntimePolicy.interactionMode === "orchestrate"
+              ? persistedOrchestrateFingerprint === candidateOrchestrateFingerprint
+                ? ""
+                : candidateOrchestrateInstructions
+              : persistedOrchestrateFingerprint !== null
+                ? buildOrchestrateModeExitNote()
+                : "";
+        const nextOrchestrateFingerprint = compactionCommand
+          ? null
+          : goalCommand
+            ? persistedOrchestrateFingerprint
+            : resolvedRuntimePolicy.interactionMode === "orchestrate"
+              ? candidateOrchestrateFingerprint
+              : null;
+        const inlineTurnNotes = [restartNote, orchestrateNote]
+          .filter((part) => part !== "")
+          .join("\n\n");
         const legacyRecoveredRunIds = new Set(
           projection.runs
             .filter(
@@ -1016,6 +1051,7 @@ export const layer: Layer.Layer<
         const missedRunIds = new Set(missedRuns.map((source) => source.id));
         return {
           sameNativeThread,
+          nativeThreadHasTurns,
           handoffUsage,
           deliveredItemIds,
           coveredItemIds,
@@ -1024,6 +1060,9 @@ export const layer: Layer.Layer<
           legacyInputRunIds,
           missedRuns,
           missedRunIds,
+          orchestrateNote,
+          inlineTurnNotes,
+          nextOrchestrateFingerprint,
           budget: Effect.gen(function* () {
             return handoffBudget({
               tokenCap,
@@ -1426,18 +1465,19 @@ export const layer: Layer.Layer<
       const now = yield* DateTime.now;
       const handoffContext = resumedHandoffContext ?? handoffContextForThread(loadedProviderThread);
       const {
-        sameNativeThread,
+        nativeThreadHasTurns,
         handoffUsage,
         deliveredItemIds,
-        acceptedAttempts,
-        nativeInputRunIds,
-        legacyInputRunIds,
+        orchestrateNote,
+        inlineTurnNotes,
+        nextOrchestrateFingerprint,
         budget,
       } = handoffContext;
       const retryHandoff = resumedRetryHandoff ?? (yield* prepareRetryHandoff(handoffContext));
       const runningProviderThread: OrchestrationV2ProviderThread = {
         ...loadedProviderThread,
         contextUsage: handoffUsage,
+        orchestrateContextFingerprint: nextOrchestrateFingerprint,
         id: providerThread.id,
         driver: session.driver,
         providerInstanceId: run.providerInstanceId,
@@ -1714,11 +1754,7 @@ export const layer: Layer.Layer<
               .filter((turn) => turn.providerThreadId === providerThread.id)
               .map((turn) => turn.ordinal),
           ) + 1,
-        nativeThreadHasTurns:
-          nativeInputRunIds.size > 0 ||
-          (legacyInputRunIds.size > 0 &&
-            sameNativeThread &&
-            !acceptedAttempts.some((source) => source.nativeThreadId !== undefined)),
+        nativeThreadHasTurns,
         shouldStartProviderTurn: runControls.shouldStartProviderTurn,
         shouldFinalizeRun: runControls.shouldFinalizeRun,
         hasUnpairedRunInterruptRequest: runControls.hasUnpairedRunInterruptRequest,

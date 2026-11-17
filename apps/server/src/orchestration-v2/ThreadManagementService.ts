@@ -722,15 +722,40 @@ const make = Effect.gen(function* () {
           ),
         );
       case "delegated_task.request":
-        return orchestrator.getThreadRecords(command.parentThreadId, []).pipe(
-          Effect.flatMap((parent) =>
-            assertProviderInstanceEnabled({
-              projectId: command.targetProjectId ?? parent.thread.projectId,
-              commandId: command.commandId,
-              instanceId: command.modelSelection.instanceId,
+        return orchestrator
+          .getThreadRecords(
+            command.parentThreadId,
+            command.continueTaskId === undefined ? [] : ["subagents"],
+            command.continueTaskId === undefined
+              ? undefined
+              : { subagentIds: [command.continueTaskId] },
+          )
+          .pipe(
+            Effect.flatMap((parent) => {
+              const continuedChildId =
+                command.continueTaskId === undefined
+                  ? undefined
+                  : (parent.subagents.find((candidate) => candidate.id === command.continueTaskId)
+                      ?.childThreadId ?? undefined);
+              const resolveProjectId =
+                command.targetProjectId !== undefined
+                  ? Effect.succeed(command.targetProjectId)
+                  : continuedChildId !== undefined
+                    ? orchestrator
+                        .getThreadRecords(continuedChildId, [])
+                        .pipe(Effect.map((child) => child.thread.projectId))
+                    : Effect.succeed(parent.thread.projectId);
+              return resolveProjectId.pipe(
+                Effect.flatMap((projectId) =>
+                  assertProviderInstanceEnabled({
+                    projectId,
+                    commandId: command.commandId,
+                    instanceId: command.modelSelection.instanceId,
+                  }),
+                ),
+              );
             }),
-          ),
-        );
+          );
       case "prepared-run.release":
       case "prepared-run.retry":
         return orchestrator

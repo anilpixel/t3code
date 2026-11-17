@@ -791,6 +791,9 @@ function makeLocalCommandHarness(input: {
     lastError: null,
   };
   const startTurn = vi.fn((_turn: ProviderAdapter.ProviderAdapterV2TurnInput) => Effect.void);
+  const compactThread = vi.fn((_turn: ProviderAdapter.ProviderAdapterV2TurnInput) => Effect.void);
+  let activeRunId = runId;
+  let currentProjectShells = input.projectShells ?? [];
   const sideChatThread = {
     ...providerThread,
     nativeThreadRef: {
@@ -839,9 +842,22 @@ function makeLocalCommandHarness(input: {
                 ? Effect.succeed({
                     driver: providerThread.driver,
                     providerSession,
-                    ensureThread: () => Effect.succeed(providerThread),
-                    resumeThread: () => Effect.succeed(projection.providerThreads[0]),
+                    ensureThread: () =>
+                      Effect.succeed(
+                        input.interactionMode !== undefined
+                          ? {
+                              ...providerThread,
+                              nativeThreadRef: {
+                                driver: providerThread.driver,
+                                nativeId: "native-orchestrate-thread",
+                                strength: "strong" as const,
+                              },
+                            }
+                          : providerThread,
+                      ),
+                    resumeThread: () => Effect.succeed(projection.providerThreads.at(-1)),
                     startTurn,
+                    compactThread,
                   } as never)
                 : Effect.die("A local command must not open a native session."),
   );
@@ -849,7 +865,12 @@ function makeLocalCommandHarness(input: {
     (input: RunExecutionService.RunExecutionServiceV2StartRootRunInput) => Effect.Effect<void>
   >((runInput) =>
     input.sideChat !== undefined || input.interactionMode !== undefined
-      ? runInput.session.startTurn(runInput as never).pipe(Effect.orDie)
+      ? (runInput.message.text.trim().toLowerCase() === "/compact" &&
+        runInput.message.attachments.length === 0 &&
+        runInput.session.compactThread !== undefined
+          ? runInput.session.compactThread(runInput as never)
+          : runInput.session.startTurn(runInput as never)
+        ).pipe(Effect.orDie)
       : input.failReadsAfterRunning === true || input.previousTurn !== undefined
         ? Effect.suspend(() =>
             providerBusy ? Effect.die("The previous provider turn is still running.") : Effect.void,
@@ -858,22 +879,24 @@ function makeLocalCommandHarness(input: {
   );
   const failReadIfRunning = Effect.suspend(() =>
     input.failReadsAfterRunning === true &&
-    projection.runs.find((candidate) => candidate.id === runId)?.status === "running"
+    projection.runs.find((candidate) => candidate.id === activeRunId)?.status === "running"
       ? Effect.fail(
           new ProjectionStore.ProjectionStoreReadError({ threadId, cause: "database unavailable" }),
         )
       : Effect.void,
   );
-  const tryHandlePromptCommand = vi.fn(() =>
-    input.logoutFailure === undefined
-      ? Effect.succeed(true)
-      : Effect.fail(
-          new ProviderSetupError({
-            instanceId: oldInstanceId,
-            operation: "logout",
-            detail: input.logoutFailure,
-          }),
-        ),
+  const tryHandlePromptCommand = vi.fn(({ text }: { readonly text: string }) =>
+    text.trim().toLowerCase() !== "/logout"
+      ? Effect.succeed(false)
+      : input.logoutFailure === undefined
+        ? Effect.succeed(true)
+        : Effect.fail(
+            new ProviderSetupError({
+              instanceId: oldInstanceId,
+              operation: "logout",
+              detail: input.logoutFailure,
+            }),
+          ),
   );
   const writeIfRunCurrent = vi.fn(({ events: incoming, activeAttemptId, expectedStatus }) =>
     "writeFailure" in input
@@ -884,7 +907,7 @@ function makeLocalCommandHarness(input: {
           }),
         )
       : Effect.sync(() => {
-          const current = projection.runs.find((candidate) => candidate.id === runId);
+          const current = projection.runs.find((candidate) => candidate.id === activeRunId);
           const committed =
             current !== undefined &&
             current.activeAttemptId === activeAttemptId &&
@@ -968,7 +991,7 @@ function makeLocalCommandHarness(input: {
             Effect.succeedSome({
               workspaceRoot: input.workspaceRoot ?? "/tmp/native-account-project",
             } as never),
-          listShells: () => Effect.succeed((input.projectShells ?? []) as never),
+          listShells: () => Effect.succeed(currentProjectShells as never),
         }),
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
           getThreadRecords,
@@ -983,14 +1006,14 @@ function makeLocalCommandHarness(input: {
               ),
             }),
           getTurnStartHistory: () =>
-            input.sideChat !== undefined
-              ? Effect.succeed([])
-              : Effect.fail(
+            "historyReadFailureAfterFallback" in input
+              ? Effect.fail(
                   new ProjectionStore.ProjectionStoreReadError({
                     threadId,
                     cause: input.historyReadFailureAfterFallback,
                   }),
-                ),
+                )
+              : Effect.succeed([]),
         }),
         Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
           open,
@@ -1025,6 +1048,15 @@ function makeLocalCommandHarness(input: {
     setProjection: (next: OrchestrationV2ThreadProjection) => {
       projection = next;
     },
+    setProjectShells: (
+      next: ReadonlyArray<{
+        readonly id: ProjectId;
+        readonly title: string;
+        readonly workspaceRoot: string;
+      }>,
+    ) => {
+      currentProjectShells = next;
+    },
     resolveRuntimePolicy,
     createWorktree,
     open,
@@ -1032,6 +1064,7 @@ function makeLocalCommandHarness(input: {
     writeIfRunCurrent,
     startRootRun,
     startTurn,
+    compactThread,
     forkThread,
     interruptTurn,
     tryHandlePromptCommand,
@@ -1041,12 +1074,125 @@ function makeLocalCommandHarness(input: {
     attemptId,
     projection: () => projection,
     start: Effect.gen(function* () {
-      yield* (yield* ProviderTurnStart.ProviderTurnStartServiceV2).start({ threadId, runId });
+      yield* (yield* ProviderTurnStart.ProviderTurnStartServiceV2).start({
+        threadId,
+        runId: activeRunId,
+      });
     }).pipe(Effect.provide(layer)),
+    startNextTurn: (nextInput: {
+      readonly text: string;
+      readonly interactionMode?: OrchestrationV2ThreadProjection["thread"]["interactionMode"];
+    }) =>
+      Effect.gen(function* () {
+        const currentRun = projection.runs.find((candidate) => candidate.id === activeRunId)!;
+        const currentAttempt = projection.attempts.find(
+          (candidate) => candidate.id === currentRun.activeAttemptId,
+        )!;
+        const nextOrdinal = currentRun.ordinal + 1;
+        const nextRunId = RunId.make(`run-turn-${nextOrdinal}`);
+        const nextRootId = NodeId.make(`root-turn-${nextOrdinal}`);
+        const nextAttemptId = RunAttemptId.make(`attempt-turn-${nextOrdinal}`);
+        const nextMessageId = MessageId.make(`message-turn-${nextOrdinal}`);
+        const nextScopeId = CheckpointScopeId.make(`scope-turn-${nextOrdinal}`);
+        projection = {
+          ...projection,
+          thread: {
+            ...projection.thread,
+            interactionMode: nextInput.interactionMode ?? projection.thread.interactionMode,
+          },
+          runs: [
+            ...projection.runs.map((candidate) =>
+              candidate.id === activeRunId
+                ? { ...candidate, status: "completed" as const, completedAt: now }
+                : candidate,
+            ),
+            {
+              ...run,
+              id: nextRunId,
+              ordinal: nextOrdinal,
+              userMessageId: nextMessageId,
+              rootNodeId: nextRootId,
+              activeAttemptId: nextAttemptId,
+              status: "starting",
+            },
+          ],
+          attempts: [
+            ...projection.attempts.map((candidate) =>
+              candidate.id === currentAttempt.id
+                ? { ...candidate, status: "completed" as const, completedAt: now }
+                : candidate,
+            ),
+            {
+              ...projection.attempts[0]!,
+              id: nextAttemptId,
+              runId: nextRunId,
+              rootNodeId: nextRootId,
+              status: "pending",
+              startedAt: null,
+              completedAt: null,
+            },
+          ],
+          nodes: [
+            ...projection.nodes.map((candidate) =>
+              candidate.id === currentRun.rootNodeId
+                ? { ...candidate, status: "completed" as const, completedAt: now }
+                : candidate,
+            ),
+            {
+              ...projection.nodes[0]!,
+              id: nextRootId,
+              runId: nextRunId,
+              rootNodeId: nextRootId,
+              checkpointScopeId: nextScopeId,
+              status: "pending",
+              startedAt: null,
+              completedAt: null,
+            },
+          ],
+          providerTurns: [
+            ...projection.providerTurns,
+            {
+              id: ProviderTurnId.make(`provider-turn-${currentRun.ordinal}`),
+              providerThreadId,
+              nodeId: currentRun.rootNodeId!,
+              runAttemptId: currentAttempt.id,
+              ordinal: projection.providerTurns.length + 1,
+              nativeTurnRef: null,
+              status: "completed",
+              startedAt: now,
+              completedAt: now,
+            },
+          ],
+          messages: [
+            ...projection.messages,
+            {
+              ...message,
+              id: nextMessageId,
+              runId: nextRunId,
+              nodeId: nextRootId,
+              text: nextInput.text,
+            },
+          ],
+          checkpointScopes: [
+            ...projection.checkpointScopes,
+            {
+              ...projection.checkpointScopes[0]!,
+              id: nextScopeId,
+              runId: nextRunId,
+              nodeId: nextRootId,
+            },
+          ],
+        };
+        activeRunId = nextRunId;
+        yield* (yield* ProviderTurnStart.ProviderTurnStartServiceV2).start({
+          threadId,
+          runId: nextRunId,
+        });
+      }).pipe(Effect.provide(layer)),
     startWithRetry: Effect.gen(function* () {
       yield* (yield* ProviderTurnStart.ProviderTurnStartServiceV2).start({
         threadId,
-        runId,
+        runId: activeRunId,
         willRetry: true,
       });
     }).pipe(Effect.provide(layer)),
@@ -1899,5 +2045,79 @@ effectIt.effect.each([
       } else {
         expect(deliveredText).toBe("Add billing endpoint and frontend toggle");
       }
+    }),
+);
+
+effectIt.effect(
+  "deduplicates orchestrate instructions across turns until project map changes, compaction, or mode exit",
+  () =>
+    Effect.gen(function* () {
+      const currentProjectId = ProjectId.make("project-native-account-command");
+      const siblingProjectId = ProjectId.make("project-web-client");
+      const mobileProjectId = ProjectId.make("project-mobile-client");
+      const initialProjects = [
+        { id: currentProjectId, title: "API Server", workspaceRoot: "/repos/api" },
+        { id: siblingProjectId, title: "Web Client", workspaceRoot: "/repos/web" },
+      ];
+      const harness = makeLocalCommandHarness({
+        text: "Turn 1: plan cross-project billing",
+        interactionMode: "orchestrate",
+        projectShells: initialProjects,
+      });
+
+      yield* harness.start;
+      expect(harness.startTurn.mock.calls[0]?.[0]?.message.text).toContain(
+        "<t3_code_orchestrate_mode>",
+      );
+      const initialFingerprint =
+        harness.projection().providerThreads.at(-1)?.orchestrateContextFingerprint ?? null;
+      expect(initialFingerprint).not.toBeNull();
+
+      // Turn 2 on the same native thread with identical projects omits redundant instructions.
+      yield* harness.startNextTurn({ text: "Turn 2: check progress" });
+      expect(harness.startTurn.mock.calls[1]?.[0]?.message.text).toBe("Turn 2: check progress");
+      expect(harness.projection().providerThreads.at(-1)?.orchestrateContextFingerprint).toBe(
+        initialFingerprint,
+      );
+
+      // Turn 3 after registering a new project re-injects the updated project map.
+      harness.setProjectShells([
+        ...initialProjects,
+        { id: mobileProjectId, title: "Mobile App", workspaceRoot: "/repos/mobile" },
+      ]);
+      yield* harness.startNextTurn({ text: "Turn 3: include mobile" });
+      const turn3Text = harness.startTurn.mock.calls[2]?.[0]?.message.text;
+      expect(turn3Text).toContain("<t3_code_orchestrate_mode>");
+      expect(turn3Text).toContain("Mobile App");
+      const updatedFingerprint =
+        harness.projection().providerThreads.at(-1)?.orchestrateContextFingerprint ?? null;
+      expect(updatedFingerprint).not.toBeNull();
+      expect(updatedFingerprint).not.toBe(initialFingerprint);
+
+      // Turn 4 (/compact) does not inject orchestrate instructions and resets the fingerprint.
+      yield* harness.startNextTurn({ text: "/compact" });
+      expect(harness.compactThread).toHaveBeenCalledOnce();
+      expect(harness.compactThread.mock.calls[0]?.[0]?.message.text).toBe("/compact");
+      expect(harness.projection().providerThreads.at(-1)?.orchestrateContextFingerprint).toBeNull();
+
+      // Turn 5 after compaction re-injects orchestrate instructions.
+      yield* harness.startNextTurn({ text: "Turn 5: resume after compact" });
+      expect(harness.startTurn.mock.calls[3]?.[0]?.message.text).toContain(
+        "<t3_code_orchestrate_mode>",
+      );
+
+      // Turn 6 switching out of orchestrate injects exit note once and clears fingerprint.
+      yield* harness.startNextTurn({
+        text: "Turn 6: edit directly",
+        interactionMode: "default",
+      });
+      const turn6Text = harness.startTurn.mock.calls[4]?.[0]?.message.text;
+      expect(turn6Text).toContain("<t3_code_orchestrate_mode_exit>");
+      expect(turn6Text).not.toContain("<t3_code_orchestrate_mode>");
+      expect(harness.projection().providerThreads.at(-1)?.orchestrateContextFingerprint).toBeNull();
+
+      // Turn 7 in default mode carries neither orchestrate block nor exit note.
+      yield* harness.startNextTurn({ text: "Turn 7: normal follow-up" });
+      expect(harness.startTurn.mock.calls[5]?.[0]?.message.text).toBe("Turn 7: normal follow-up");
     }),
 );

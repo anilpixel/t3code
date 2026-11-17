@@ -3539,6 +3539,70 @@ describe("OrchestratorMcpService provider resolution", () => {
               `${worktree.childThreadId}:${worktreeChild.runs[0]!.id}`,
               `${worktree.childThreadId}:${worktreeChild.runs[0]!.id}`,
             ]);
+
+            const busyContinue = yield* service
+              .delegateTask(scope, {
+                task: "Follow up while child is still active.",
+                continueTaskId: worktree.taskId,
+                mode: "async",
+                clientRequestId: "continue-while-busy",
+              })
+              .pipe(Effect.flip);
+            assert.equal(busyContinue.code, "invalid_request");
+            assert.include(busyContinue.message, "unfinished work");
+
+            yield* orchestrator.dispatch({
+              type: "thread.metadata.update",
+              commandId: CommandId.make("child:assign-worktree"),
+              threadId: worktree.childThreadId!,
+              branch: "subagent/target-feature",
+              worktreePath: "/repo/worktrees/target-feature",
+            });
+            yield* service.cancelTask(scope, {
+              taskId: worktree.taskId,
+              reason: "Ready for review follow-up",
+            });
+
+            const isolationMismatch = yield* service
+              .delegateTask(scope, {
+                task: "Try switching worktree subagent to shared.",
+                continueTaskId: worktree.taskId,
+                isolation: "shared",
+                mode: "async",
+                clientRequestId: "continue-isolation-mismatch",
+              })
+              .pipe(Effect.flip);
+            assert.equal(isolationMismatch.code, "invalid_request");
+            assert.include(isolationMismatch.message, "isolated worktree checkout");
+
+            const continueRequest = {
+              task: "Address PR review comment on the existing branch.",
+              continueTaskId: worktree.taskId,
+              isolation: "worktree" as const,
+              mode: "async" as const,
+              clientRequestId: "continue-settled-worktree",
+            };
+            const continued = yield* service.delegateTask(scope, continueRequest);
+            const retriedContinued = yield* service.delegateTask(scope, continueRequest);
+            assert.deepEqual(retriedContinued, continued);
+            assert.notEqual(continued.taskId, worktree.taskId);
+            assert.equal(continued.childThreadId, worktree.childThreadId);
+
+            const continuedChild = yield* orchestrator.getThreadProjection(
+              continued.childThreadId!,
+            );
+            assert.equal(continuedChild.thread.branch, "subagent/target-feature");
+            assert.equal(continuedChild.thread.worktreePath, "/repo/worktrees/target-feature");
+            assert.equal(continuedChild.runs.length, 2);
+            assert.equal(continuedChild.runs[1]?.delegatedTaskId, continued.taskId);
+            assert.isUndefined(continuedChild.runs[1]?.workspacePreparation);
+            assert.deepEqual(continuedChild.runs[1]?.modelSelection, {
+              instanceId: altInstanceId,
+              model: "gpt-5.5",
+            });
+            // Continuing an existing worktree thread must not resolve a fresh commit or prepare a new worktree.
+            assert.deepEqual(yield* Ref.get(resolvedCwds), ["/repo/target"]);
+            assert.equal((yield* Ref.get(preparedRuns)).length, 2);
           }).pipe(Effect.provide(serviceLayer));
         }),
       ),

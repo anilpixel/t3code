@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeCrypto from "node:crypto";
 import type { ProviderInteractionMode } from "@t3tools/contracts";
 
 // Codex truncates entries over 4,000 bytes; keep each section self-contained and below that limit.
@@ -8,7 +10,7 @@ Ordinary coding tasks need no T3 tools.
 
 - Subagents: use your native tool when the child uses your provider, a model it offers, and no settings beyond yours (Claude \`Agent\`, \`run_in_background:false\`; Codex \`spawn_agent\`, then wait). Use \`delegate_task\` for another provider's model, user-asked settings, a separate checkout (\`isolation:"worktree"\`), or \`delegate_task\` by name. A native type on another provider's model counts too. Background agent: \`delegate_task\`, never a background \`Agent\`. Workflow only when asked.
 - Call \`orchestrator_capabilities\` once per thread, before the first \`delegate_task\`. Again only after an error or a user-named provider change. Settings go in \`target.options\`. Provider or model unavailable: say so. Never switch unasked, or fall back to native tools, Workflow, or CLIs. Never make a child's checkout in the shell or in \`task\`.
-- Every new delegate review or re-check is a new \`delegate_task\` (brief, findings, objections), never a \`t3_thread_send\`. Fix small review findings yourself; start no delegate for them. When told to proceed without a delegate, or to run fewer, \`task_cancel\` the extras. Start no replacement.
+- Every new delegate review or re-check is a new \`delegate_task\` (brief, findings, objections), never a \`t3_thread_send\`. To continue a settled local delegate in its existing thread/worktree/PR, pass \`continueTaskId\` on \`delegate_task\`. Fix small review findings yourself unless in Orchestrate mode; start no delegate for them. When told to proceed without a delegate, or to run fewer, \`task_cancel\` the extras. Start no replacement.
 - Follow a running delegate's \`next\`. Do not poll it (\`task_status\`, \`sleep\`, watchers, Monitor, ScheduleWakeup). Stop a delegate run you replace or no longer need with \`task_cancel\`, never \`t3_thread_interrupt\` on a \`childThreadId\`.
 - If you are a subagent or child, do the work yourself. Start no subagents unless your task says to.`,
   `- \`t3_thread_launch\` and \`create_threads\` make new top-level threads, only when the user asks for a new thread. "Subagent", "delegate", and "parallel" never mean one. Worktree thread: set \`workspaceStrategy\`. Honor a requested base. Otherwise, independent work uses the default branch as \`remote/branch\` with \`startFromOrigin:true\`; with no remote, use the local default. Required unpublished commits and dependent work use their local base. Shell worktrees do not bind it, and no checkout setup in its prompt. No \`workspaceStrategy\`: project root, not your worktree.
@@ -69,7 +71,7 @@ Investigate with read-only actions and do not edit files or otherwise execute th
 
 const T3_CODE_ACP_ORCHESTRATE_MODE_INSTRUCTIONS = `## T3 Code interaction mode: Orchestrate
 
-Coordinate work across projects as the lead orchestrator instead of editing repository files directly in this thread unless the user explicitly asks you to edit directly here. Break work down by project, dispatch implementation and verification to subagents via \`delegate_task\` with \`target: { projectId }\` (using \`isolation: "worktree"\` for code edits), never mutate sibling repositories via shell \`cd\` paths, and synthesize their results. Treat this mode as active until T3 Code supplies a different interaction-mode instruction.`;
+Coordinate work across projects as the lead orchestrator instead of editing repository files directly in this thread. Break work down by project, dispatch implementation and verification to subagents via \`delegate_task\` with \`target: { projectId }\` (using \`isolation: "worktree"\` for code edits, and \`continueTaskId\` to continue an existing subagent's branch/PR), never mutate repositories directly or merge PRs during unattended wakes, and synthesize their results. Treat this mode as active until T3 Code supplies a different interaction-mode instruction.`;
 
 export interface OrchestrateProjectSummary {
   readonly id: string;
@@ -105,16 +107,28 @@ export function buildOrchestrateTurnInstructions(input: {
     "<t3_code_orchestrate_mode>",
     "## T3 Code interaction mode: Orchestrate",
     "",
-    "You are acting as the cross-project orchestrator for this turn:",
+    "You are acting as the persistent cross-project orchestrator:",
     "- Clarify requirements only if a missing decision would materially change the outcome; otherwise decompose the goal across the relevant projects.",
-    '- Dispatch implementation, file edits, and test runs to subagents with `delegate_task` (`target: { projectId }`, using `isolation: "worktree"` for isolated code changes). Call `orchestrator_capabilities` once per thread before your first `delegate_task`.',
-    "- Do not edit repository files directly in this orchestrator thread unless the user explicitly asks you to edit here, and never cross into other repositories via shell paths (`cd ../...`). Read-only inspection and T3 orchestration tools are allowed.",
-    "- Orchestrate mode applies only to turns carrying `<t3_code_orchestrate_mode>`. If a later turn omits this block, return to normal Default build mode and carry out edits directly.",
+    '- Dispatch implementation, file edits, and test runs to subagents with `delegate_task` (`target: { projectId }`, using `isolation: "worktree"` for isolated code changes, and `continueTaskId` to continue a settled local subagent on its existing branch/PR). Call `orchestrator_capabilities` once per thread before your first `delegate_task`.',
+    "- Direct writes to project repositories and worktrees, and PR/MR merges during unattended wakes, are blocked in Orchestrate mode. Read-only inspection, issue/PR queries (`linear`, `gh`), sandbox notes, and T3 orchestration tools are allowed.",
+    "- Orchestrate mode stays active across subsequent turns in this conversation until `<t3_code_orchestrate_mode_exit>` appears.",
     "",
     "Registered projects in this environment:",
     ...projectLines,
     "</t3_code_orchestrate_mode>",
   ].join("\n");
+}
+
+export function buildOrchestrateModeExitNote(): string {
+  return [
+    "<t3_code_orchestrate_mode_exit>",
+    "Orchestrate mode is no longer active for this thread. Follow the current interaction mode and carry out edits directly when appropriate.",
+    "</t3_code_orchestrate_mode_exit>",
+  ].join("\n");
+}
+
+export function computeOrchestrateContextFingerprint(instructions: string): string {
+  return NodeCrypto.createHash("sha256").update(instructions).digest("hex").slice(0, 16);
 }
 
 export interface T3AcpInstructionState {
